@@ -1,0 +1,9 @@
+{
+    "sensitivity": 0.055,
+    "anti_deadzone": 0.18,
+    "exponent": 0.85,
+    "smoothing": 0.4,
+    "invert_y": false,
+    "aim_only": false,
+    "always_on_top": true
+}
