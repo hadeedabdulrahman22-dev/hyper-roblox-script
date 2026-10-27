@@ -280,13 +280,6 @@ def main():
     print("  KBM-to-XInput Virtual Controller: Phase 7 GUI Active")
     print("  [F8] toggle Active/Paused    [END] emergency exit")
     print("=" * 60)
-    slot = get_connected_xinput_slot()
-    if slot == 0:
-        print("XInput Status: [CONNECTED ON SLOT 0 - Player 1] (Active for Roblox!)", flush=True)
-    elif slot is not None:
-        print(f"XInput Status: [CONNECTED ON SLOT {slot}] (Warning: Roblox prefers Slot 0)", flush=True)
-    else:
-        print("XInput Status: [NOT CONNECTED]", flush=True)
 
     try:
         engine = Engine(CONFIG_PATH)
@@ -297,6 +290,14 @@ def main():
             "(or the PC needs a restart after installing it).\n"
             "Install it from: https://github.com/nefarius/ViGEmBus/releases",
         )
+
+    slot = get_connected_xinput_slot()
+    if slot == 0:
+        print("XInput Status: [CONNECTED ON SLOT 0 - Player 1] (Active for Roblox!)", flush=True)
+    elif slot is not None:
+        print(f"XInput Status: [CONNECTED ON SLOT {slot}] (Warning: Roblox prefers Slot 0)", flush=True)
+    else:
+        print("XInput Status: [NOT CONNECTED]", flush=True)
 
     app = ControllerApp(engine)
     try:
