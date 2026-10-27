@@ -3,6 +3,9 @@ setlocal
 title KBM-to-XInput Virtual Controller
 cd /d "%~dp0"
 
+rem --- check existing virtual environment first ---
+if exist ".venv\Scripts\python.exe" goto :havevenv
+
 rem --- find Python (prefer the "py" launcher) ---
 set "PY="
 where py >nul 2>nul
@@ -14,7 +17,6 @@ if not defined PY (
 if not defined PY goto :nopython
 
 rem --- create the virtual environment if missing ---
-if exist ".venv\Scripts\python.exe" goto :havevenv
 echo Creating virtual environment - first run only...
 %PY% -m venv .venv
 if errorlevel 1 goto :fail
