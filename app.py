@@ -1,9 +1,14 @@
 """KBM-to-XInput Virtual Controller - GUI. Run with run_controller.bat."""
+import os
 import sys
 import threading
 import time
 import tkinter as tk
 from tkinter import messagebox
+
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+if SCRIPT_DIR not in sys.path:
+    sys.path.insert(0, SCRIPT_DIR)
 
 
 def fatal(title, message):
