@@ -1,4 +1,5 @@
 import ctypes
+from ctypes import wintypes
 import math
 import sys
 import threading
@@ -10,15 +11,16 @@ from pynput import keyboard, mouse
 sys.stdout.reconfigure(line_buffering=True)
 
 # ==============================================================================
-# CONFIGURATION & PARAMETERS (PHASE 6)
+# CONFIGURATION & PARAMETERS (PHASE 7)
 # ==============================================================================
-SENSITIVITY = 0.055     # High responsiveness for controller thumbstick look
-ANTI_DEADZONE = 0.18   # Breaks game deadzone immediately on micro-movements
-EXPONENT = 0.85        # Sub-linear response curve for fine micro-aim + fast snap flicks
-SMOOTHING = 0.40       # Anti-jitter filtering
-INVERT_Y = False       # Normal (mouse-up = stick-up)
-AIM_ONLY = False       # False = Full Controller Mode (suppresses physical KBM)
-UPDATE_RATE_HZ = 120   # 120Hz precision polling loop
+SENSITIVITY = 0.055          # High responsiveness for controller thumbstick look
+ANTI_DEADZONE = 0.18        # Breaks game deadzone immediately on micro-movements
+EXPONENT = 0.85             # Sub-linear response curve for fine micro-aim + fast snap flicks
+SMOOTHING = 0.40            # Anti-jitter filtering
+INVERT_Y = False            # Normal (mouse-up = stick-up)
+AIM_ONLY = False            # False = Full Controller Mode (suppresses physical KBM)
+BLOCK_MOUSE_MOVE = False    # False = Unchecked (normal GetCursorPos / SetCursorPos loop)
+UPDATE_RATE_HZ = 120        # 120Hz precision polling loop
 
 # ==============================================================================
 # WINDOWS API & STRUCTURES
@@ -34,6 +36,7 @@ class POINT(ctypes.Structure):
 # ==============================================================================
 is_active = False
 running = True
+first_aim_tick = True
 
 # Controller State
 curr_lx = 0.0
@@ -47,8 +50,6 @@ held_keys = set()
 pressed_buttons = set()
 
 # Low-level mouse hook tracking
-last_mouse_x = None
-last_mouse_y = None
 accum_mouse_dx = 0
 accum_mouse_dy = 0
 mouse_delta_lock = threading.Lock()
@@ -107,17 +108,47 @@ VK_MAPPINGS = {
 }
 
 # ==============================================================================
+# XINPUT SLOT DETECTION
+# ==============================================================================
+def get_connected_xinput_slot():
+    """Returns the XInput slot number (0-3) if connected, or None."""
+    class XINPUT_GAMEPAD(ctypes.Structure):
+        _fields_ = [
+            ('wButtons', wintypes.WORD),
+            ('bLeftTrigger', wintypes.BYTE),
+            ('bRightTrigger', wintypes.BYTE),
+            ('sThumbLX', wintypes.SHORT),
+            ('sThumbLY', wintypes.SHORT),
+            ('sThumbRX', wintypes.SHORT),
+            ('sThumbRY', wintypes.SHORT),
+        ]
+    class XINPUT_STATE(ctypes.Structure):
+        _fields_ = [
+            ('dwPacketNumber', wintypes.DWORD),
+            ('Gamepad', XINPUT_GAMEPAD),
+        ]
+
+    for dll in ['xinput1_4.dll', 'xinput1_3.dll', 'xinput9_1_0.dll']:
+        try:
+            xi = ctypes.windll.LoadLibrary(dll)
+            state = XINPUT_STATE()
+            for slot in range(4):
+                if xi.XInputGetState(slot, ctypes.byref(state)) == 0:
+                    return slot
+        except Exception:
+            continue
+    return None
+
+# ==============================================================================
 # CONTROLLER RESET & WAKE-UP
 # ==============================================================================
 def reset_all_inputs():
     """Resets all virtual sticks, triggers, buttons to neutral."""
     global curr_lx, curr_ly, curr_rx, curr_ry, curr_lt, curr_rt, held_keys, pressed_buttons
-    global accum_mouse_dx, accum_mouse_dy, last_mouse_x, last_mouse_y
+    global accum_mouse_dx, accum_mouse_dy
     with mouse_delta_lock:
         accum_mouse_dx = 0
         accum_mouse_dy = 0
-        last_mouse_x = None
-        last_mouse_y = None
 
     with gamepad_lock:
         held_keys.clear()
@@ -132,14 +163,14 @@ def reset_all_inputs():
         gamepad.update()
 
 def send_controller_wakeup_pulse():
-    """Sends a brief virtual gamepad pulse so Roblox switches HUD to Xbox controller badges."""
+    """Sends a virtual gamepad wake-up pulse so Roblox switches HUD to Xbox controller badges."""
     def _pulse():
         time.sleep(0.04)
         with gamepad_lock:
-            # Send a micro-deflection to register Gamepad1 with Roblox UserInputService
-            gamepad.left_joystick_float(0.0, 0.15)
+            # Send stick deflection past deadzone to trigger Gamepad1 recognition in Roblox
+            gamepad.left_joystick_float(0.0, 0.40)
             gamepad.update()
-        time.sleep(0.06)
+        time.sleep(0.08)
         with gamepad_lock:
             gamepad.left_joystick_float(0.0, 0.0)
             gamepad.update()
@@ -211,13 +242,13 @@ def update_keyboard_controller():
 # LOW-LEVEL EVENT FILTERS (PROCESSED DIRECTLY BEFORE SUPPRESSION)
 # ==============================================================================
 def kb_event_filter(msg, data):
-    """Processes key-down and key-up BEFORE suppression so controller state always updates."""
+    """Processes key-down and key-up BEFORE suppression; debounces key repeats."""
     global is_active, running
     vk = data.vkCode
 
     # 1. Kill-Switch: END (Never suppressed - safety exit)
     if vk == VK_END:
-        if msg in (0x0100, 0x0104):  # WM_KEYDOWN, WM_SYSKEYDOWN
+        if msg in (0x0100, 0x0104):
             print("\n[KILL-SWITCH] 'END' pressed! Stopping controller...", flush=True)
             running = False
             is_active = False
@@ -246,24 +277,25 @@ def kb_event_filter(msg, data):
         is_press = (msg in (0x0100, 0x0104))
         is_release = (msg in (0x0101, 0x0105))
 
+        # Key-Repeat Flood Fix: Only update if state actually changed!
         if is_press:
-            held_keys.add(key_name)
+            if key_name not in held_keys:
+                held_keys.add(key_name)
+                update_keyboard_controller()
         elif is_release:
-            held_keys.discard(key_name)
+            if key_name in held_keys:
+                held_keys.remove(key_name)
+                update_keyboard_controller()
 
-        # UPDATE VIRTUAL CONTROLLER IMMEDIATELY BEFORE SUPPRESSING
-        update_keyboard_controller()
-
-        # Suppress physical key so Roblox only sees the Virtual Controller
+        # Suppress physical key from reaching the game window
         if kb_listener:
             kb_listener.suppress_event()
 
-    # Unmapped keys pass through normally
     return True
 
 def mouse_event_filter(msg, data):
-    """Processes mouse clicks & movement BEFORE suppression."""
-    global curr_lt, curr_rt, accum_mouse_dx, accum_mouse_dy, last_mouse_x, last_mouse_y
+    """Processes mouse clicks & movement."""
+    global curr_lt, curr_rt, accum_mouse_dx, accum_mouse_dy
     if not running or not is_active:
         return True
 
@@ -289,39 +321,27 @@ def mouse_event_filter(msg, data):
 
     # 3. Mouse Movement (Look -> Right Stick)
     elif msg == 0x0200:  # WM_MOUSEMOVE
-        # Ignore synthetic/injected movements
+        # If Block Physical Mouse Move is OFF, let 120Hz loop handle cursor via Get/SetCursorPos
+        if not BLOCK_MOUSE_MOVE:
+            return True
+
         if data.flags & 1:
             if mouse_listener:
                 mouse_listener.suppress_event()
             return True
 
-        if last_mouse_x is None:
-            last_mouse_x = data.pt.x
-            last_mouse_y = data.pt.y
-            if mouse_listener:
-                mouse_listener.suppress_event()
-            return True
+        # Use actual current OS cursor position as the anchor reference
+        pt = POINT()
+        user32.GetCursorPos(ctypes.byref(pt))
 
-        dx = data.pt.x - last_mouse_x
-        dy = data.pt.y - last_mouse_y
-        last_mouse_x = data.pt.x
-        last_mouse_y = data.pt.y
+        dx = data.pt.x - pt.x
+        dy = data.pt.y - pt.y
 
-        with mouse_delta_lock:
-            accum_mouse_dx += dx
-            accum_mouse_dy += dy
+        if dx != 0 or dy != 0:
+            with mouse_delta_lock:
+                accum_mouse_dx += dx
+                accum_mouse_dy += dy
 
-        # Keep cursor bounded so physical mouse never hits monitor boundaries
-        screen_w = user32.GetSystemMetrics(0)
-        screen_h = user32.GetSystemMetrics(1)
-        if last_mouse_x < 60 or last_mouse_x > screen_w - 60 or last_mouse_y < 60 or last_mouse_y > screen_h - 60:
-            center_x = screen_w // 2
-            center_y = screen_h // 2
-            user32.SetCursorPos(center_x, center_y)
-            last_mouse_x = center_x
-            last_mouse_y = center_y
-
-        # Suppress physical mouse movement from reaching the game window
         if mouse_listener:
             mouse_listener.suppress_event()
 
@@ -365,7 +385,8 @@ def calculate_right_stick(dx, dy, prev_rx, prev_ry):
     return smoothed_rx, smoothed_ry
 
 def mouse_aim_worker():
-    global curr_rx, curr_ry
+    global curr_rx, curr_ry, first_aim_tick
+    pt = POINT()
     tick_interval = 1.0 / UPDATE_RATE_HZ
     winmm.timeBeginPeriod(1)
 
@@ -375,11 +396,31 @@ def mouse_aim_worker():
                 time.sleep(0.016)
                 continue
 
-            with mouse_delta_lock:
-                dx = accum_mouse_dx
-                dy = accum_mouse_dy
-                accum_mouse_dx = 0
-                accum_mouse_dy = 0
+            screen_w = user32.GetSystemMetrics(0)
+            screen_h = user32.GetSystemMetrics(1)
+            center_x = screen_w // 2
+            center_y = screen_h // 2
+
+            if not BLOCK_MOUSE_MOVE:
+                user32.GetCursorPos(ctypes.byref(pt))
+
+                if first_aim_tick:
+                    user32.SetCursorPos(center_x, center_y)
+                    first_aim_tick = False
+                    curr_rx = 0.0
+                    curr_ry = 0.0
+                    time.sleep(tick_interval)
+                    continue
+
+                dx = pt.x - center_x
+                dy = pt.y - center_y
+                user32.SetCursorPos(center_x, center_y)
+            else:
+                with mouse_delta_lock:
+                    dx = accum_mouse_dx
+                    dy = accum_mouse_dy
+                    accum_mouse_dx = 0
+                    accum_mouse_dy = 0
 
             new_rx, new_ry = calculate_right_stick(dx, dy, curr_rx, curr_ry)
 
@@ -401,8 +442,16 @@ def mouse_aim_worker():
 def main():
     global kb_listener, mouse_listener
     print("="*65, flush=True)
-    print("  KBM-to-XInput Virtual Controller: Phase 6 Core", flush=True)
+    print("  KBM-to-XInput Virtual Controller: Phase 7 Core", flush=True)
     print("="*65, flush=True)
+    slot = get_connected_xinput_slot()
+    if slot == 0:
+        print("XInput Status: [CONNECTED ON SLOT 0 - Player 1] (Active for Roblox!)", flush=True)
+    elif slot is not None:
+        print(f"XInput Status: [CONNECTED ON SLOT {slot}] (Warning: Roblox prefers Slot 0)", flush=True)
+    else:
+        print("XInput Status: [NOT CONNECTED]", flush=True)
+
     print("Controls:")
     print("  [F8]   : Toggle Active / Paused (Suppresses physical inputs)")
     print("  [END]  : Emergency Kill-Switch & Exit")

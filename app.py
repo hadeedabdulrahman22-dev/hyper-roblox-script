@@ -1,4 +1,5 @@
 import ctypes
+from ctypes import wintypes
 import json
 import math
 import os
@@ -13,7 +14,7 @@ from pynput import keyboard, mouse
 sys.stdout.reconfigure(line_buffering=True)
 
 # ==============================================================================
-# CONFIGURATION & CONSTANTS (PHASE 6)
+# CONFIGURATION & CONSTANTS (PHASE 7)
 # ==============================================================================
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_FILE = os.path.join(SCRIPT_DIR, "config.json")
@@ -25,6 +26,7 @@ DEFAULT_CONFIG = {
     "smoothing": 0.40,         # Anti-jitter filtering
     "invert_y": False,         # Normal (mouse-up = stick-up)
     "aim_only": False,         # Default False (Full Controller mode for Aim Assist)
+    "block_mouse_move": False, # Default False (uses smooth Get/SetCursorPos aim loop)
     "always_on_top": True
 }
 
@@ -36,6 +38,7 @@ params = {
     "smoothing": DEFAULT_CONFIG["smoothing"],
     "invert_y": DEFAULT_CONFIG["invert_y"],
     "aim_only": DEFAULT_CONFIG["aim_only"],
+    "block_mouse_move": DEFAULT_CONFIG["block_mouse_move"],
     "always_on_top": DEFAULT_CONFIG["always_on_top"]
 }
 
@@ -55,7 +58,9 @@ class POINT(ctypes.Structure):
 # ==============================================================================
 is_active = False
 running = True
+first_aim_tick = True
 app_instance = None
+auto_test_running = False
 
 # Controller State
 curr_lx = 0.0
@@ -69,8 +74,6 @@ held_keys = set()
 pressed_buttons = set()
 
 # Low-level mouse hook tracking
-last_mouse_x = None
-last_mouse_y = None
 accum_mouse_dx = 0
 accum_mouse_dy = 0
 mouse_delta_lock = threading.Lock()
@@ -112,7 +115,7 @@ VK_MAPPINGS = {
     ord('D'): 'd',
     0x20: 'space',      # Space (Jump)
     ord('C'): 'c',      # C (Slide)
-    0x10: 'shift',      # Shift
+    0x10: 'shift',      # Shift (Slide)
     0xA0: 'shift',      # Left Shift
     0xA1: 'shift',      # Right Shift
     ord('R'): 'r',      # R (Reload)
@@ -127,6 +130,38 @@ VK_MAPPINGS = {
     ord('X'): 'x',      # X (Ultimate)
     ord('F'): 'f',      # F (Quick Melee)
 }
+
+# ==============================================================================
+# XINPUT SLOT DETECTION
+# ==============================================================================
+def get_connected_xinput_slot():
+    """Returns the connected XInput slot index (0-3) or None."""
+    class XINPUT_GAMEPAD(ctypes.Structure):
+        _fields_ = [
+            ('wButtons', wintypes.WORD),
+            ('bLeftTrigger', wintypes.BYTE),
+            ('bRightTrigger', wintypes.BYTE),
+            ('sThumbLX', wintypes.SHORT),
+            ('sThumbLY', wintypes.SHORT),
+            ('sThumbRX', wintypes.SHORT),
+            ('sThumbRY', wintypes.SHORT),
+        ]
+    class XINPUT_STATE(ctypes.Structure):
+        _fields_ = [
+            ('dwPacketNumber', wintypes.DWORD),
+            ('Gamepad', XINPUT_GAMEPAD),
+        ]
+
+    for dll in ['xinput1_4.dll', 'xinput1_3.dll', 'xinput9_1_0.dll']:
+        try:
+            xi = ctypes.windll.LoadLibrary(dll)
+            state = XINPUT_STATE()
+            for slot in range(4):
+                if xi.XInputGetState(slot, ctypes.byref(state)) == 0:
+                    return slot
+        except Exception:
+            continue
+    return None
 
 # ==============================================================================
 # CONFIG PERSISTENCE
@@ -159,12 +194,10 @@ def save_config():
 def reset_all_inputs():
     """Resets all virtual buttons, triggers, and joysticks to neutral."""
     global curr_lx, curr_ly, curr_rx, curr_ry, curr_lt, curr_rt, held_keys, pressed_buttons
-    global accum_mouse_dx, accum_mouse_dy, last_mouse_x, last_mouse_y
+    global accum_mouse_dx, accum_mouse_dy
     with mouse_delta_lock:
         accum_mouse_dx = 0
         accum_mouse_dy = 0
-        last_mouse_x = None
-        last_mouse_y = None
 
     with gamepad_lock:
         held_keys.clear()
@@ -179,13 +212,14 @@ def reset_all_inputs():
         gamepad.update()
 
 def send_controller_wakeup_pulse():
-    """Sends a brief virtual gamepad pulse so Roblox switches HUD to Xbox controller badges."""
+    """Sends a virtual gamepad pulse so Roblox switches HUD to Xbox controller badges."""
     def _pulse():
         time.sleep(0.04)
         with gamepad_lock:
-            gamepad.left_joystick_float(0.0, 0.15)
+            # Deflect past deadzone to trigger Gamepad1 recognition in Roblox
+            gamepad.left_joystick_float(0.0, 0.40)
             gamepad.update()
-        time.sleep(0.06)
+        time.sleep(0.08)
         with gamepad_lock:
             gamepad.left_joystick_float(0.0, 0.0)
             gamepad.update()
@@ -270,7 +304,7 @@ def update_keyboard_controller():
 # LOW-LEVEL EVENT FILTERS (PROCESSED DIRECTLY BEFORE SUPPRESSION)
 # ==============================================================================
 def kb_event_filter(msg, data):
-    """Processes key-down and key-up BEFORE suppression so controller state always updates."""
+    """Processes key-down and key-up BEFORE suppression; debounces key repeats."""
     global is_active, running
     vk = data.vkCode
 
@@ -311,24 +345,25 @@ def kb_event_filter(msg, data):
         is_press = (msg in (0x0100, 0x0104))
         is_release = (msg in (0x0101, 0x0105))
 
+        # Key-Repeat Flood Fix: Only update if state actually changed!
         if is_press:
-            held_keys.add(key_name)
+            if key_name not in held_keys:
+                held_keys.add(key_name)
+                update_keyboard_controller()
         elif is_release:
-            held_keys.discard(key_name)
-
-        # UPDATE VIRTUAL CONTROLLER IMMEDIATELY BEFORE SUPPRESSING
-        update_keyboard_controller()
+            if key_name in held_keys:
+                held_keys.remove(key_name)
+                update_keyboard_controller()
 
         # Suppress physical key from reaching Windows or the game
         if kb_listener:
             kb_listener.suppress_event()
 
-    # Unmapped keys (Esc, Enter, Tab, Chat, etc.) pass through normally
     return True
 
 def mouse_event_filter(msg, data):
-    """Processes mouse clicks & movement BEFORE suppression."""
-    global curr_lt, curr_rt, accum_mouse_dx, accum_mouse_dy, last_mouse_x, last_mouse_y
+    """Processes mouse clicks & movement."""
+    global curr_lt, curr_rt, accum_mouse_dx, accum_mouse_dy
     if not running or not is_active:
         return True
 
@@ -354,39 +389,27 @@ def mouse_event_filter(msg, data):
 
     # 3. Mouse Movement (Look -> Right Stick)
     elif msg == 0x0200:  # WM_MOUSEMOVE
-        # Ignore synthetic cursor recentering
-        if data.flags & 1:
+        # If Block Physical Mouse Move is OFF, let 120Hz loop handle cursor via Get/SetCursorPos
+        if not params["block_mouse_move"]:
+            return True
+
+        if data.flags & 1:  # Ignore synthetic cursor recentering
             if mouse_listener:
                 mouse_listener.suppress_event()
             return True
 
-        if last_mouse_x is None:
-            last_mouse_x = data.pt.x
-            last_mouse_y = data.pt.y
-            if mouse_listener:
-                mouse_listener.suppress_event()
-            return True
+        # Use actual current OS cursor position as the anchor reference
+        pt = POINT()
+        user32.GetCursorPos(ctypes.byref(pt))
 
-        dx = data.pt.x - last_mouse_x
-        dy = data.pt.y - last_mouse_y
-        last_mouse_x = data.pt.x
-        last_mouse_y = data.pt.y
+        dx = data.pt.x - pt.x
+        dy = data.pt.y - pt.y
 
-        with mouse_delta_lock:
-            accum_mouse_dx += dx
-            accum_mouse_dy += dy
+        if dx != 0 or dy != 0:
+            with mouse_delta_lock:
+                accum_mouse_dx += dx
+                accum_mouse_dy += dy
 
-        # Keep cursor bounded so physical mouse never hits monitor boundaries
-        screen_w = user32.GetSystemMetrics(0)
-        screen_h = user32.GetSystemMetrics(1)
-        if last_mouse_x < 60 or last_mouse_x > screen_w - 60 or last_mouse_y < 60 or last_mouse_y > screen_h - 60:
-            center_x = screen_w // 2
-            center_y = screen_h // 2
-            user32.SetCursorPos(center_x, center_y)
-            last_mouse_x = center_x
-            last_mouse_y = center_y
-
-        # Suppress physical mouse movement from reaching the game window
         if mouse_listener:
             mouse_listener.suppress_event()
 
@@ -437,7 +460,8 @@ def calculate_right_stick(dx, dy, prev_rx, prev_ry):
     return smoothed_rx, smoothed_ry
 
 def mouse_aim_worker():
-    global curr_rx, curr_ry
+    global curr_rx, curr_ry, first_aim_tick
+    pt = POINT()
     tick_interval = 1.0 / UPDATE_RATE_HZ
     winmm.timeBeginPeriod(1)
 
@@ -447,11 +471,31 @@ def mouse_aim_worker():
                 time.sleep(0.016)
                 continue
 
-            with mouse_delta_lock:
-                dx = accum_mouse_dx
-                dy = accum_mouse_dy
-                accum_mouse_dx = 0
-                accum_mouse_dy = 0
+            screen_w = user32.GetSystemMetrics(0)
+            screen_h = user32.GetSystemMetrics(1)
+            center_x = screen_w // 2
+            center_y = screen_h // 2
+
+            if not params["block_mouse_move"]:
+                user32.GetCursorPos(ctypes.byref(pt))
+
+                if first_aim_tick:
+                    user32.SetCursorPos(center_x, center_y)
+                    first_aim_tick = False
+                    curr_rx = 0.0
+                    curr_ry = 0.0
+                    time.sleep(tick_interval)
+                    continue
+
+                dx = pt.x - center_x
+                dy = pt.y - center_y
+                user32.SetCursorPos(center_x, center_y)
+            else:
+                with mouse_delta_lock:
+                    dx = accum_mouse_dx
+                    dy = accum_mouse_dy
+                    accum_mouse_dx = 0
+                    accum_mouse_dy = 0
 
             new_rx, new_ry = calculate_right_stick(dx, dy, curr_rx, curr_ry)
 
@@ -483,7 +527,7 @@ class ControllerApp(ctk.CTk):
         ctk.set_default_color_theme("blue")
 
         self.title("KBM-to-XInput Virtual Controller")
-        self.geometry("540x780")
+        self.geometry("540x860")
         self.resizable(False, False)
 
         # Set Always on Top from config
@@ -499,14 +543,14 @@ class ControllerApp(ctk.CTk):
     def create_widgets(self):
         # 1. Top Status Banner
         self.status_frame = ctk.CTkFrame(self, corner_radius=12, border_width=2)
-        self.status_frame.pack(fill="x", padx=16, pady=(16, 10))
+        self.status_frame.pack(fill="x", padx=16, pady=(14, 6))
 
         self.status_label = ctk.CTkLabel(
             self.status_frame,
             text="STATUS: PAUSED (Press F8)",
             font=ctk.CTkFont(size=18, weight="bold")
         )
-        self.status_label.pack(pady=(12, 4))
+        self.status_label.pack(pady=(10, 2))
 
         self.substatus_label = ctk.CTkLabel(
             self.status_frame,
@@ -514,11 +558,32 @@ class ControllerApp(ctk.CTk):
             font=ctk.CTkFont(size=11),
             text_color="#A0A0A0"
         )
-        self.substatus_label.pack(pady=(0, 10))
+        self.substatus_label.pack(pady=(0, 4))
 
-        # 2. Mode & Safety Controls Frame
+        # XInput Slot Status Indicator
+        self.slot_label = ctk.CTkLabel(
+            self.status_frame,
+            text="XInput Status: Checking...",
+            font=ctk.CTkFont(size=11, weight="bold"),
+            text_color="#00E676"
+        )
+        self.slot_label.pack(pady=(0, 8))
+
+        # 2. "3s Auto-Controller Test" Button (Bright & Prominent)
+        self.auto_test_btn = ctk.CTkButton(
+            self,
+            text="3s Auto-Controller Test (Click, then focus Roblox)",
+            font=ctk.CTkFont(size=13, weight="bold"),
+            fg_color="#1F6AA5",
+            hover_color="#144870",
+            height=38,
+            command=self.run_auto_controller_test
+        )
+        self.auto_test_btn.pack(fill="x", padx=16, pady=(4, 8))
+
+        # 3. Mode & Safety Controls Frame
         self.mode_frame = ctk.CTkFrame(self, corner_radius=10)
-        self.mode_frame.pack(fill="x", padx=16, pady=6)
+        self.mode_frame.pack(fill="x", padx=16, pady=4)
 
         # Aim-Only Hybrid Mode Switch
         self.aim_only_var = ctk.BooleanVar(value=params["aim_only"])
@@ -529,7 +594,7 @@ class ControllerApp(ctk.CTk):
             font=ctk.CTkFont(size=13, weight="bold"),
             command=self.on_aim_only_toggle
         )
-        self.aim_only_switch.pack(anchor="w", padx=16, pady=(12, 2))
+        self.aim_only_switch.pack(anchor="w", padx=16, pady=(10, 2))
 
         self.aim_hint_label = ctk.CTkLabel(
             self.mode_frame,
@@ -537,11 +602,11 @@ class ControllerApp(ctk.CTk):
             font=ctk.CTkFont(size=10),
             text_color="#888888"
         )
-        self.aim_hint_label.pack(anchor="w", padx=16, pady=(0, 10))
+        self.aim_hint_label.pack(anchor="w", padx=16, pady=(0, 8))
 
-        # Checkboxes row (Always on Top & Invert Y)
+        # Row 1 Checkboxes (Always on Top & Invert Y)
         cb_row = ctk.CTkFrame(self.mode_frame, fg_color="transparent")
-        cb_row.pack(fill="x", padx=16, pady=(0, 12))
+        cb_row.pack(fill="x", padx=16, pady=(0, 6))
 
         self.topmost_var = ctk.BooleanVar(value=params["always_on_top"])
         self.topmost_cb = ctk.CTkCheckBox(
@@ -550,7 +615,7 @@ class ControllerApp(ctk.CTk):
             variable=self.topmost_var,
             command=self.on_topmost_toggle
         )
-        self.topmost_cb.pack(side="left", padx=(0, 24))
+        self.topmost_cb.pack(side="left", padx=(0, 20))
 
         self.invert_y_var = ctk.BooleanVar(value=params["invert_y"])
         self.invert_y_cb = ctk.CTkCheckBox(
@@ -561,55 +626,65 @@ class ControllerApp(ctk.CTk):
         )
         self.invert_y_cb.pack(side="left")
 
-        # 3. Tuning Sliders Frame
+        # Row 2 Checkbox: Block Physical Mouse Move
+        self.block_mouse_var = ctk.BooleanVar(value=params["block_mouse_move"])
+        self.block_mouse_cb = ctk.CTkCheckBox(
+            self.mode_frame,
+            text="Block Physical Mouse Move (Unchecked = Smooth Cursor Centering)",
+            variable=self.block_mouse_var,
+            command=self.on_block_mouse_toggle
+        )
+        self.block_mouse_cb.pack(anchor="w", padx=16, pady=(0, 10))
+
+        # 4. Tuning Sliders Frame
         self.sliders_frame = ctk.CTkFrame(self, corner_radius=10)
-        self.sliders_frame.pack(fill="x", padx=16, pady=6)
+        self.sliders_frame.pack(fill="x", padx=16, pady=4)
 
         slider_title = ctk.CTkLabel(
             self.sliders_frame,
             text="Mouse Aim & Curve Tuning",
             font=ctk.CTkFont(size=14, weight="bold")
         )
-        slider_title.pack(anchor="w", padx=16, pady=(10, 8))
+        slider_title.pack(anchor="w", padx=16, pady=(8, 6))
 
         # Slider: Sensitivity (0.005 to 0.150)
         self.sens_label = ctk.CTkLabel(self.sliders_frame, text=f"Sensitivity: {params['sensitivity']:.3f}", font=ctk.CTkFont(size=12))
         self.sens_label.pack(anchor="w", padx=16, pady=(2, 0))
         self.sens_slider = ctk.CTkSlider(self.sliders_frame, from_=0.005, to=0.150, number_of_steps=145, command=self.on_sens_change)
         self.sens_slider.set(params["sensitivity"])
-        self.sens_slider.pack(fill="x", padx=16, pady=(0, 8))
+        self.sens_slider.pack(fill="x", padx=16, pady=(0, 6))
 
         # Slider: Anti-Deadzone Boost (0.00 to 0.35)
         self.deadzone_label = ctk.CTkLabel(self.sliders_frame, text=f"Anti-Deadzone Boost: {params['anti_deadzone']:.2f}", font=ctk.CTkFont(size=12))
         self.deadzone_label.pack(anchor="w", padx=16, pady=(2, 0))
         self.deadzone_slider = ctk.CTkSlider(self.sliders_frame, from_=0.00, to=0.35, number_of_steps=35, command=self.on_deadzone_change)
         self.deadzone_slider.set(params["anti_deadzone"])
-        self.deadzone_slider.pack(fill="x", padx=16, pady=(0, 8))
+        self.deadzone_slider.pack(fill="x", padx=16, pady=(0, 6))
 
         # Slider: Response Curve / Exponent (0.40 to 1.50)
         self.expo_label = ctk.CTkLabel(self.sliders_frame, text=f"Response Exponent: {params['exponent']:.2f}", font=ctk.CTkFont(size=12))
         self.expo_label.pack(anchor="w", padx=16, pady=(2, 0))
         self.expo_slider = ctk.CTkSlider(self.sliders_frame, from_=0.40, to=1.50, number_of_steps=110, command=self.on_expo_change)
         self.expo_slider.set(params["exponent"])
-        self.expo_slider.pack(fill="x", padx=16, pady=(0, 8))
+        self.expo_slider.pack(fill="x", padx=16, pady=(0, 6))
 
         # Slider: Smoothing (0.00 to 0.85)
         self.smooth_label = ctk.CTkLabel(self.sliders_frame, text=f"Smoothing (Anti-Jitter): {params['smoothing']:.2f}", font=ctk.CTkFont(size=12))
         self.smooth_label.pack(anchor="w", padx=16, pady=(2, 0))
         self.smooth_slider = ctk.CTkSlider(self.sliders_frame, from_=0.00, to=0.85, number_of_steps=85, command=self.on_smooth_change)
         self.smooth_slider.set(params["smoothing"])
-        self.smooth_slider.pack(fill="x", padx=16, pady=(0, 12))
+        self.smooth_slider.pack(fill="x", padx=16, pady=(0, 10))
 
-        # 4. Live Telemetry Frame (No text clipping)
+        # 5. Live Telemetry Frame (No text clipping)
         self.telemetry_frame = ctk.CTkFrame(self, corner_radius=10)
-        self.telemetry_frame.pack(fill="x", padx=16, pady=6)
+        self.telemetry_frame.pack(fill="x", padx=16, pady=4)
 
         telem_title = ctk.CTkLabel(
             self.telemetry_frame,
             text="Live Virtual Controller Telemetry",
             font=ctk.CTkFont(size=13, weight="bold")
         )
-        telem_title.pack(anchor="w", padx=14, pady=(8, 4))
+        telem_title.pack(anchor="w", padx=14, pady=(6, 2))
 
         self.stick_telem_label = ctk.CTkLabel(
             self.telemetry_frame,
@@ -624,11 +699,11 @@ class ControllerApp(ctk.CTk):
             font=ctk.CTkFont(family="Consolas", size=11),
             text_color="#88C0D0"
         )
-        self.trigger_telem_label.pack(anchor="w", padx=14, pady=(0, 10))
+        self.trigger_telem_label.pack(anchor="w", padx=14, pady=(0, 8))
 
-        # 5. Bottom Actions Frame (Save Settings)
+        # 6. Bottom Actions Frame (Save Settings)
         action_row = ctk.CTkFrame(self, fg_color="transparent")
-        action_row.pack(fill="x", padx=16, pady=(8, 12))
+        action_row.pack(fill="x", padx=16, pady=(6, 10))
 
         self.save_btn = ctk.CTkButton(
             action_row,
@@ -647,7 +722,7 @@ class ControllerApp(ctk.CTk):
         )
         self.save_status_label.pack(side="right")
 
-    # Slider & Checkbox Callbacks
+    # Callbacks
     def on_sens_change(self, val):
         params["sensitivity"] = round(float(val), 3)
         self.sens_label.configure(text=f"Sensitivity: {params['sensitivity']:.3f}")
@@ -676,10 +751,68 @@ class ControllerApp(ctk.CTk):
     def on_invert_y_toggle(self):
         params["invert_y"] = self.invert_y_var.get()
 
+    def on_block_mouse_toggle(self):
+        params["block_mouse_move"] = self.block_mouse_var.get()
+
     def on_save_settings(self):
         if save_config():
             self.save_status_label.configure(text="Saved!")
             self.after(2000, lambda: self.save_status_label.configure(text=""))
+
+    def run_auto_controller_test(self):
+        global auto_test_running
+        if auto_test_running:
+            return
+        auto_test_running = True
+
+        def _worker():
+            for sec in [3, 2, 1]:
+                self.auto_test_btn.configure(
+                    text=f"Starting in {sec}s... Focus Roblox now!",
+                    fg_color="#D35400"
+                )
+                time.sleep(1.0)
+
+            self.auto_test_btn.configure(
+                text="TESTING CONTROLLER IN-GAME (4s)...",
+                fg_color="#00E676",
+                text_color="#000000"
+            )
+
+            t_start = time.time()
+            step = 0
+            while time.time() - t_start < 4.0:
+                with gamepad_lock:
+                    # Move forward and rotate camera right
+                    gamepad.left_joystick_float(0.0, 1.0)
+                    gamepad.right_joystick_float(0.6, 0.0)
+
+                    # Alternate Jump (A) and Slide (B)
+                    if step % 2 == 0:
+                        gamepad.release_button(BUTTON_MAP['B'])
+                        gamepad.press_button(BUTTON_MAP['A'])
+                    else:
+                        gamepad.release_button(BUTTON_MAP['A'])
+                        gamepad.press_button(BUTTON_MAP['B'])
+
+                    gamepad.update()
+
+                step += 1
+                time.sleep(0.4)
+
+            # Cleanup after test
+            with gamepad_lock:
+                gamepad.reset()
+                gamepad.update()
+
+            self.auto_test_btn.configure(
+                text="3s Auto-Controller Test (Click, then focus Roblox)",
+                fg_color="#1F6AA5",
+                text_color="#FFFFFF"
+            )
+            auto_test_running = False
+
+        threading.Thread(target=_worker, daemon=True).start()
 
     def update_telemetry(self):
         # Update Status Banner Colors & Text
@@ -689,6 +822,24 @@ class ControllerApp(ctk.CTk):
         else:
             self.status_frame.configure(fg_color="#2E1414", border_color="#FF4B4B")
             self.status_label.configure(text="STATUS: PAUSED (Press F8)", text_color="#FF4B4B")
+
+        # Update XInput Slot
+        slot = get_connected_xinput_slot()
+        if slot == 0:
+            self.slot_label.configure(
+                text="XInput Slot: Player 1 (Slot 0 - Active for Roblox!)",
+                text_color="#00E676"
+            )
+        elif slot is not None:
+            self.slot_label.configure(
+                text=f"XInput Slot: Player {slot+1} (Slot {slot}) - WARNING: Roblox prefers Slot 0!",
+                text_color="#FF9800"
+            )
+        else:
+            self.slot_label.configure(
+                text="XInput Slot: Not Connected",
+                text_color="#FF4B4B"
+            )
 
         # Update Telemetry Labels
         lx_str = f"{curr_lx:5.2f}"
@@ -740,8 +891,16 @@ class ControllerApp(ctk.CTk):
 # ==============================================================================
 def main():
     print("="*65, flush=True)
-    print("  KBM-to-XInput Virtual Controller: Phase 6 GUI Active", flush=True)
+    print("  KBM-to-XInput Virtual Controller: Phase 7 GUI Active", flush=True)
     print("="*65, flush=True)
+    slot = get_connected_xinput_slot()
+    if slot == 0:
+        print("XInput Status: [CONNECTED ON SLOT 0 - Player 1] (Active for Roblox!)", flush=True)
+    elif slot is not None:
+        print(f"XInput Status: [CONNECTED ON SLOT {slot}] (Warning: Roblox prefers Slot 0)", flush=True)
+    else:
+        print("XInput Status: [NOT CONNECTED]", flush=True)
+
     print("Default Controls:")
     print("  [F8]   : Toggle Active / Paused (Suppresses physical inputs)")
     print("  [END]  : Emergency Kill-Switch & Exit")
