@@ -46,7 +46,7 @@ DEFAULT_CONFIG = {
     "smoothing": 0.40,          # anti-jitter (0 = raw, higher = smoother)
     "invert_y": False,
     "aim_only": False,          # True = only mouse -> right stick, keyboard untouched
-    "block_mouse_move": False,  # False = smooth cursor centering, True = hook suppression
+    "block_mouse_move": True,   # True = freeze physical cursor via hook suppression
     "always_on_top": True,
 }
 
@@ -83,21 +83,23 @@ VK_TO_KEY = {
     ord("C"): "c",
     0x10: "shift", 0xA0: "shift", 0xA1: "shift",
     ord("R"): "r",
+    ord("V"): "v",
     ord("1"): "1", ord("2"): "2", ord("3"): "3",
     0x61: "1", 0x62: "2", 0x63: "3",   # numpad 1-3
     ord("Q"): "q", ord("E"): "e", ord("X"): "x", ord("F"): "f",
 }
 
-# Controller button -> logical keys that press it
+# Controller button -> logical keys that press it (matched to Hypershot Controller HUD)
 BUTTON_BINDINGS = {
-    "A": {"space"},              # Jump
-    "B": {"c", "shift"},         # Slide
-    "X": {"r"},                  # Reload
-    "Y": {"1", "2", "3"},        # Swap weapon
-    "LB": {"q"},                 # Ability 1
-    "RB": {"e"},                 # Ability 2
-    "DPAD_UP": {"x"},            # Ultimate
-    "R3": {"f"},                 # Quick melee
+    "A": {"space"},              # Jump -> A
+    "B": {"x"},                  # Ability 3 (Ultimate) -> B
+    "X": {"r", "v"},             # Reload / Inspect -> X
+    "Y": {"1", "2"},             # Swap Weapons (Primary/Secondary) -> Y
+    "LB": {"q"},                 # Ability 1 -> LB / L1
+    "RB": {"e"},                 # Ability 2 -> RB / R1
+    "DPAD_UP": {"3"},            # Knife / Melee Equip (Slot 3) -> DPAD_UP
+    "L3": {"c", "shift"},        # Slide -> L3 (Left Stick Click)
+    "R3": {"f"},                 # Quick Melee -> R3 (Right Stick Click)
 }
 
 BUTTON_MAP = {
@@ -108,6 +110,7 @@ BUTTON_MAP = {
     "LB": vg.XUSB_BUTTON.XUSB_GAMEPAD_LEFT_SHOULDER,
     "RB": vg.XUSB_BUTTON.XUSB_GAMEPAD_RIGHT_SHOULDER,
     "DPAD_UP": vg.XUSB_BUTTON.XUSB_GAMEPAD_DPAD_UP,
+    "L3": vg.XUSB_BUTTON.XUSB_GAMEPAD_LEFT_THUMB,
     "R3": vg.XUSB_BUTTON.XUSB_GAMEPAD_RIGHT_THUMB,
 }
 
@@ -153,15 +156,16 @@ def get_connected_xinput_slot():
 # ==============================================================================
 def compute_right_stick(dx, dy, prev_rx, prev_ry, params):
     """Convert one tick of mouse movement into smoothed right-stick values."""
+    # When mouse is not moving, immediately decay/snap stick to neutral with ZERO upward drift
+    if abs(dx) == 0 and abs(dy) == 0:
+        return 0.0, 0.0
+
     input_x = float(dx)
     input_y = float(dy) if params["invert_y"] else float(-dy)
     mag = math.hypot(input_x, input_y)
 
-    if mag == 0.0:  # no movement: decay stick back to neutral
-        rx, ry = prev_rx * 0.2, prev_ry * 0.2
-        if abs(rx) < 0.02 and abs(ry) < 0.02:
-            return 0.0, 0.0
-        return rx, ry
+    if mag == 0.0:
+        return 0.0, 0.0
 
     nx, ny = input_x / mag, input_y / mag
     powered = math.pow(mag * params["sensitivity"], params["exponent"])
@@ -299,7 +303,6 @@ class Engine:
             if on:
                 self.reset_inputs()
                 self._seed_passthrough()
-                self._place_cursor_anchor()
                 self._first_aim_tick = True
                 self.active = True
                 self._wakeup_pulse()
@@ -346,27 +349,6 @@ class Engine:
             if user32.GetAsyncKeyState(vk) & 0x8000:
                 self._passthrough.add(vk)
 
-    def _place_cursor_anchor(self):
-        x = y = None
-        hwnd = user32.GetForegroundWindow()
-        rect = wintypes.RECT()
-        if hwnd and user32.GetWindowRect(hwnd, ctypes.byref(rect)):
-            if rect.right > rect.left and rect.bottom > rect.top:
-                x = (rect.left + rect.right) // 2
-                y = (rect.top + rect.bottom) // 2
-        if x is None:
-            x = user32.GetSystemMetrics(0) // 2
-            y = user32.GetSystemMetrics(1) // 2
-        self._anchor = (x, y)
-        user32.SetCursorPos(x, y)
-
-    def _hold_cursor(self):
-        cur = wintypes.POINT()
-        if user32.GetCursorPos(ctypes.byref(cur)):
-            ax, ay = self._anchor
-            if abs(cur.x - ax) > CURSOR_DRIFT_LIMIT_PX or abs(cur.y - ay) > CURSOR_DRIFT_LIMIT_PX:
-                user32.SetCursorPos(ax, ay)
-
     def _wakeup_pulse(self):
         """Stick deflection past Roblox deadzone so Roblox switches UI to Xbox-controller icons."""
         def pulse():
@@ -400,11 +382,11 @@ class Engine:
                     self.gamepad.right_joystick_float(0.6, 0.0)
 
                     if step % 2 == 0:
-                        self.gamepad.release_button(BUTTON_MAP["B"])
+                        self.gamepad.release_button(BUTTON_MAP["L3"])
                         self.gamepad.press_button(BUTTON_MAP["A"])
                     else:
                         self.gamepad.release_button(BUTTON_MAP["A"])
-                        self.gamepad.press_button(BUTTON_MAP["B"])
+                        self.gamepad.press_button(BUTTON_MAP["L3"])
                     self.gamepad.update()
 
                 step += 1
@@ -522,22 +504,22 @@ class Engine:
             return True
 
         if msg == WM_MOUSEMOVE:                            # look -> right stick
-            # If Block Physical Mouse Move is OFF, let 120Hz aim loop handle cursor
-            if not self.params.get("block_mouse_move", False):
-                return False
-
             cur = wintypes.POINT()
             if not user32.GetCursorPos(ctypes.byref(cur)):
-                return True
+                return self.params.get("block_mouse_move", True)
+
             dx = data.pt.x - cur.x
             dy = data.pt.y - cur.y
-            if dx or dy:
+
+            if dx != 0 or dy != 0:
                 with self._delta_lock:
                     self._acc_dx += dx
                     self._acc_dy += dy
                 self.mouse_events += 1
                 self.last_delta = (dx, dy)
-            return True
+
+            # Suppress physical cursor move so OS cursor stays naturally frozen
+            return self.params.get("block_mouse_move", True)
 
         return False
 
@@ -545,34 +527,15 @@ class Engine:
     def _aim_loop(self):
         interval = 1.0 / UPDATE_RATE_HZ
         winmm.timeBeginPeriod(1)
-        pt = wintypes.POINT()
         try:
             while self.running:
                 if not self.active:
                     time.sleep(0.016)
                     continue
 
-                if not self.params.get("block_mouse_move", False):
-                    screen_w = user32.GetSystemMetrics(0)
-                    screen_h = user32.GetSystemMetrics(1)
-                    cx = screen_w // 2
-                    cy = screen_h // 2
-
-                    user32.GetCursorPos(ctypes.byref(pt))
-                    if self._first_aim_tick:
-                        user32.SetCursorPos(cx, cy)
-                        self._first_aim_tick = False
-                        time.sleep(interval)
-                        continue
-
-                    dx = pt.x - cx
-                    dy = pt.y - cy
-                    user32.SetCursorPos(cx, cy)
-                else:
-                    self._hold_cursor()
-                    with self._delta_lock:
-                        dx, dy = self._acc_dx, self._acc_dy
-                        self._acc_dx = self._acc_dy = 0
+                with self._delta_lock:
+                    dx, dy = self._acc_dx, self._acc_dy
+                    self._acc_dx = self._acc_dy = 0
 
                 new_rx, new_ry = compute_right_stick(dx, dy, self.rx, self.ry, self.params)
                 if round(new_rx, 3) != round(self.rx, 3) or round(new_ry, 3) != round(self.ry, 3):

@@ -118,7 +118,7 @@ class ControllerApp(ctk.CTk):
         self.block_mouse_var = ctk.BooleanVar(value=p["block_mouse_move"])
         ctk.CTkCheckBox(
             mode,
-            text="Block Physical Mouse Move (Unchecked = Smooth Cursor Centering)",
+            text="Block Physical Mouse Move (Recommended - Freeze Cursor)",
             variable=self.block_mouse_var,
             command=self.on_block_mouse_toggle
         ).pack(anchor="w", padx=16, pady=(4, 10))
@@ -282,7 +282,7 @@ class ControllerApp(ctk.CTk):
 
 def main():
     print("=" * 60)
-    print("  KBM-to-XInput Virtual Controller: Phase 7 GUI Active")
+    print("  KBM-to-XInput Virtual Controller Active")
     print("  [F8] toggle Active/Paused    [END] emergency exit")
     print("=" * 60)
 
