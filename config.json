@@ -6,5 +6,67 @@
     "invert_y": false,
     "aim_only": false,
     "block_mouse_move": true,
-    "always_on_top": true
+    "always_on_top": true,
+    "keybinds": {
+        "move_forward": [
+            "W"
+        ],
+        "move_backward": [
+            "S"
+        ],
+        "move_left": [
+            "A"
+        ],
+        "move_right": [
+            "D"
+        ],
+        "jump": [
+            "SPACE"
+        ],
+        "slide": [
+            "C",
+            "LSHIFT"
+        ],
+        "ability_1": [
+            "Q"
+        ],
+        "ability_2": [
+            "E"
+        ],
+        "ability_3": [
+            "X"
+        ],
+        "reload": [
+            "R",
+            "V"
+        ],
+        "swap_weapons": [
+            "1",
+            "2"
+        ],
+        "equip_melee": [
+            "3"
+        ],
+        "quick_melee": [
+            "F"
+        ],
+        "interact": [
+            "G"
+        ],
+        "emote": [
+            "B"
+        ],
+        "scoreboard": [
+            "TAB"
+        ],
+        "dpad_down": [
+            "H"
+        ],
+        "menu_start": [
+            "K"
+        ],
+        "cursor_back": [
+            "M"
+        ]
+    }
 }

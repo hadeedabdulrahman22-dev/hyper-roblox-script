@@ -76,32 +76,67 @@ user32.GetForegroundWindow.restype = wintypes.HWND
 user32.GetWindowRect.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.RECT)]
 user32.GetCursorPos.argtypes = [ctypes.POINTER(wintypes.POINT)]
 
-# Physical key -> logical key name
-VK_TO_KEY = {
-    ord("W"): "w", ord("A"): "a", ord("S"): "s", ord("D"): "d",
-    0x20: "space",
-    ord("C"): "c",
-    0x10: "shift", 0xA0: "shift", 0xA1: "shift",
-    ord("R"): "r",
-    ord("V"): "v",
-    ord("1"): "1", ord("2"): "2", ord("3"): "3",
-    0x61: "1", 0x62: "2", 0x63: "3",   # numpad 1-3
-    ord("Q"): "q", ord("E"): "e", ord("X"): "x", ord("F"): "f",
+# ==============================================================================
+# XBOX ACTIONS & DEFAULT KEYBINDS (PHASE 9)
+# ==============================================================================
+ACTIONS = [
+    # 🕹️ Movement (Left Stick)
+    {"id": "move_forward",  "name": "Move Forward",           "category": "Movement", "xbox": "LS Up",        "type": "stick",  "axis": "ly+", "default": ["W"]},
+    {"id": "move_backward", "name": "Move Backward",          "category": "Movement", "xbox": "LS Down",      "type": "stick",  "axis": "ly-", "default": ["S"]},
+    {"id": "move_left",     "name": "Move Left",              "category": "Movement", "xbox": "LS Left",      "type": "stick",  "axis": "lx-", "default": ["A"]},
+    {"id": "move_right",    "name": "Move Right",             "category": "Movement", "xbox": "LS Right",     "type": "stick",  "axis": "lx+", "default": ["D"]},
+
+    # ⚔️ Combat & Abilities
+    {"id": "jump",          "name": "Jump",                   "category": "Combat",   "xbox": "A Button",     "type": "button", "btn": vg.XUSB_BUTTON.XUSB_GAMEPAD_A,              "default": ["SPACE"]},
+    {"id": "slide",         "name": "Slide / Crouch",         "category": "Combat",   "xbox": "L3 (Left Stick Click)", "type": "button", "btn": vg.XUSB_BUTTON.XUSB_GAMEPAD_LEFT_THUMB, "default": ["C", "LSHIFT"]},
+    {"id": "ability_1",     "name": "Ability 1",              "category": "Combat",   "xbox": "LB (L1)",      "type": "button", "btn": vg.XUSB_BUTTON.XUSB_GAMEPAD_LEFT_SHOULDER, "default": ["Q"]},
+    {"id": "ability_2",     "name": "Ability 2",              "category": "Combat",   "xbox": "RB (R1)",      "type": "button", "btn": vg.XUSB_BUTTON.XUSB_GAMEPAD_RIGHT_SHOULDER,"default": ["E"]},
+    {"id": "ability_3",     "name": "Ability 3 / Ultimate",   "category": "Combat",   "xbox": "B Button",     "type": "button", "btn": vg.XUSB_BUTTON.XUSB_GAMEPAD_B,              "default": ["X"]},
+    {"id": "reload",        "name": "Reload / Inspect",       "category": "Combat",   "xbox": "X Button",     "type": "button", "btn": vg.XUSB_BUTTON.XUSB_GAMEPAD_X,              "default": ["R", "V"]},
+    {"id": "swap_weapons",  "name": "Swap Weapons",           "category": "Combat",   "xbox": "Y Button",     "type": "button", "btn": vg.XUSB_BUTTON.XUSB_GAMEPAD_Y,              "default": ["1", "2"]},
+    {"id": "equip_melee",   "name": "Equip Melee (Knife)",    "category": "Combat",   "xbox": "D-Pad Up",     "type": "button", "btn": vg.XUSB_BUTTON.XUSB_GAMEPAD_DPAD_UP,        "default": ["3"]},
+    {"id": "quick_melee",   "name": "Quick Melee",            "category": "Combat",   "xbox": "R3 (Right Stick Click)", "type": "button", "btn": vg.XUSB_BUTTON.XUSB_GAMEPAD_RIGHT_THUMB, "default": ["F"]},
+    {"id": "interact",      "name": "Interact / Use",         "category": "Combat",   "xbox": "X Button",     "type": "button", "btn": vg.XUSB_BUTTON.XUSB_GAMEPAD_X,              "default": ["G"]},
+
+    # 📋 Menus & Navigation
+    {"id": "emote",         "name": "Emote Wheel",            "category": "Menus",    "xbox": "D-Pad Left",   "type": "button", "btn": vg.XUSB_BUTTON.XUSB_GAMEPAD_DPAD_LEFT,      "default": ["B"]},
+    {"id": "scoreboard",    "name": "Scoreboard",             "category": "Menus",    "xbox": "D-Pad Right",  "type": "button", "btn": vg.XUSB_BUTTON.XUSB_GAMEPAD_DPAD_RIGHT,     "default": ["TAB"]},
+    {"id": "dpad_down",     "name": "D-Pad Down",             "category": "Menus",    "xbox": "D-Pad Down",   "type": "button", "btn": vg.XUSB_BUTTON.XUSB_GAMEPAD_DPAD_DOWN,      "default": ["H"]},
+    {"id": "menu_start",    "name": "In-Game Settings",       "category": "Menus",    "xbox": "Start / Menu", "type": "button", "btn": vg.XUSB_BUTTON.XUSB_GAMEPAD_START,          "default": ["K"]},
+    {"id": "cursor_back",   "name": "Roblox Virtual Cursor",  "category": "Menus",    "xbox": "Back / Select","type": "button", "btn": vg.XUSB_BUTTON.XUSB_GAMEPAD_BACK,           "default": ["M"]},
+]
+ACTIONS_BY_ID = {a["id"]: a for a in ACTIONS}
+DEFAULT_KEYBINDS = {a["id"]: list(a["default"]) for a in ACTIONS}
+
+BUTTON_CODE_TO_NAME = {
+    vg.XUSB_BUTTON.XUSB_GAMEPAD_A: "A",
+    vg.XUSB_BUTTON.XUSB_GAMEPAD_B: "B",
+    vg.XUSB_BUTTON.XUSB_GAMEPAD_X: "X",
+    vg.XUSB_BUTTON.XUSB_GAMEPAD_Y: "Y",
+    vg.XUSB_BUTTON.XUSB_GAMEPAD_LEFT_SHOULDER: "LB",
+    vg.XUSB_BUTTON.XUSB_GAMEPAD_RIGHT_SHOULDER: "RB",
+    vg.XUSB_BUTTON.XUSB_GAMEPAD_LEFT_THUMB: "L3",
+    vg.XUSB_BUTTON.XUSB_GAMEPAD_RIGHT_THUMB: "R3",
+    vg.XUSB_BUTTON.XUSB_GAMEPAD_DPAD_UP: "DPAD_UP",
+    vg.XUSB_BUTTON.XUSB_GAMEPAD_DPAD_DOWN: "DPAD_DOWN",
+    vg.XUSB_BUTTON.XUSB_GAMEPAD_DPAD_LEFT: "DPAD_LEFT",
+    vg.XUSB_BUTTON.XUSB_GAMEPAD_DPAD_RIGHT: "DPAD_RIGHT",
+    vg.XUSB_BUTTON.XUSB_GAMEPAD_START: "START",
+    vg.XUSB_BUTTON.XUSB_GAMEPAD_BACK: "BACK",
 }
 
-# Controller button -> logical keys that press it (matched to Hypershot Controller HUD)
+# Backward compatibility maps
 BUTTON_BINDINGS = {
-    "A": {"space"},              # Jump -> A
-    "B": {"x"},                  # Ability 3 (Ultimate) -> B
-    "X": {"r", "v"},             # Reload / Inspect -> X
-    "Y": {"1", "2"},             # Swap Weapons (Primary/Secondary) -> Y
-    "LB": {"q"},                 # Ability 1 -> LB / L1
-    "RB": {"e"},                 # Ability 2 -> RB / R1
-    "DPAD_UP": {"3"},            # Knife / Melee Equip (Slot 3) -> DPAD_UP
-    "L3": {"c", "shift"},        # Slide -> L3 (Left Stick Click)
-    "R3": {"f"},                 # Quick Melee -> R3 (Right Stick Click)
+    "A": {"space"},
+    "B": {"x"},
+    "X": {"r", "v"},
+    "Y": {"1", "2"},
+    "LB": {"q"},
+    "RB": {"e"},
+    "DPAD_UP": {"3"},
+    "L3": {"c", "shift"},
+    "R3": {"f"},
 }
-
 BUTTON_MAP = {
     "A": vg.XUSB_BUTTON.XUSB_GAMEPAD_A,
     "B": vg.XUSB_BUTTON.XUSB_GAMEPAD_B,
@@ -113,6 +148,75 @@ BUTTON_MAP = {
     "L3": vg.XUSB_BUTTON.XUSB_GAMEPAD_LEFT_THUMB,
     "R3": vg.XUSB_BUTTON.XUSB_GAMEPAD_RIGHT_THUMB,
 }
+VK_TO_KEY = {
+    ord("W"): "w", ord("A"): "a", ord("S"): "s", ord("D"): "d",
+    0x20: "space", ord("C"): "c", 0x10: "shift", 0xA0: "shift", 0xA1: "shift",
+    ord("R"): "r", ord("V"): "v", ord("1"): "1", ord("2"): "2", ord("3"): "3",
+    ord("Q"): "q", ord("E"): "e", ord("X"): "x", ord("F"): "f",
+}
+
+KEY_NAME_TO_VKS = {
+    "SPACE": [0x20], "SPACEBAR": [0x20],
+    "LSHIFT": [0xA0, 0x10], "RSHIFT": [0xA1, 0x10], "SHIFT": [0x10, 0xA0, 0xA1],
+    "LCTRL": [0xA2, 0x11], "RCTRL": [0xA3, 0x11], "CTRL": [0x11, 0xA2, 0xA3],
+    "LALT": [0xA4, 0x12], "RALT": [0xA5, 0x12], "ALT": [0x12, 0xA4, 0xA5],
+    "TAB": [0x09],
+    "CAPSLOCK": [0x14], "CAPS": [0x14],
+    "ENTER": [0x0D], "RETURN": [0x0D],
+    "BACKSPACE": [0x08],
+    "ESCAPE": [0x1B], "ESC": [0x1B],
+    "UP": [0x26], "DOWN": [0x28], "LEFT": [0x25], "RIGHT": [0x27],
+    "INSERT": [0x2D], "DELETE": [0x2E], "HOME": [0x24], "END": [0x23],
+    "PAGEUP": [0x21], "PAGEDOWN": [0x22],
+    "`": [0xC0], "~": [0xC0], "TILDE": [0xC0],
+    "-": [0xBD], "MINUS": [0xBD],
+    "=": [0xBB], "EQUALS": [0xBB],
+    "[": [0xDB], "]": [0xDD], "\\": [0xDC],
+    ";": [0xBA], "'": [0xDE],
+    ",": [0xBC], ".": [0xBE], "/": [0xBF],
+}
+for i in range(1, 13):
+    KEY_NAME_TO_VKS[f"F{i}"] = [0x6F + i]
+for i in range(10):
+    KEY_NAME_TO_VKS[f"NUM{i}"] = [0x60 + i]
+
+
+def name_to_vks(name):
+    name = str(name).strip().upper()
+    if name in KEY_NAME_TO_VKS:
+        return KEY_NAME_TO_VKS[name]
+    if len(name) == 1:
+        if "A" <= name <= "Z":
+            return [ord(name)]
+        if "0" <= name <= "9":
+            return [ord(name), 0x60 + int(name)]
+    return []
+
+
+def vk_to_name(vk):
+    special = {
+        0x20: "SPACE", 0xA0: "LSHIFT", 0xA1: "RSHIFT", 0x10: "SHIFT",
+        0xA2: "LCTRL", 0xA3: "RCTRL", 0x11: "CTRL",
+        0xA4: "LALT", 0xA5: "RALT", 0x12: "ALT",
+        0x09: "TAB", 0x14: "CAPSLOCK", 0x0D: "ENTER", 0x08: "BACKSPACE",
+        0x1B: "ESC", 0x26: "UP", 0x28: "DOWN", 0x25: "LEFT", 0x27: "RIGHT",
+        0x2D: "INSERT", 0x2E: "DELETE", 0x24: "HOME", 0x23: "END",
+        0x21: "PAGEUP", 0x22: "PAGEDOWN",
+    }
+    if vk in special:
+        return special[vk]
+    if 0x41 <= vk <= 0x5A or 0x30 <= vk <= 0x39:
+        return chr(vk)
+    if 0x60 <= vk <= 0x69:
+        return f"NUM{vk - 0x60}"
+    if 0x70 <= vk <= 0x7B:
+        return f"F{vk - 0x6F}"
+    scan = user32.MapVirtualKeyW(vk, 0)
+    lparam = scan << 16
+    buf = ctypes.create_unicode_buffer(32)
+    user32.GetKeyNameTextW(lparam, buf, 32)
+    val = buf.value.upper()
+    return val if val else f"VK_{hex(vk)}"
 
 DIAGONAL = 0.7071
 
@@ -191,7 +295,7 @@ class Engine:
     def __init__(self, config_path=CONFIG_PATH):
         self.config_path = config_path
         self.params = dict(DEFAULT_CONFIG)
-        self.load_config()
+        self.keybinds = {a["id"]: list(a["default"]) for a in ACTIONS}
 
         self.active = False
         self.running = False
@@ -202,14 +306,22 @@ class Engine:
         self._delta_lock = threading.Lock()   # guards accumulated mouse movement
         self._toggle_lock = threading.Lock()  # serialises F8 toggles
 
-        self._held = set()          # logical keys currently held (while active)
-        self._buttons = set()       # controller buttons currently pressed
+        self._held_vks = set()      # physical VK codes currently held down
+        self._buttons = set()       # controller buttons currently pressed (XUSB button values)
         self._passthrough = set()   # keys already down when we activated
         self._f8_down = False
         self._first_aim_tick = True
-        self._anchor = (0, 0)
         self._acc_dx = 0
         self._acc_dy = 0
+
+        self._rebind_action = None
+        self._rebind_on_done = None
+        self._rebind_on_cancel = None
+
+        self._vk_to_actions = {}
+        self._all_mapped_vks = set()
+        self._compile_keybinds()
+        self.load_config()
 
         self.lx = self.ly = self.rx = self.ry = 0.0
         self.lt = self.rt = 0.0
@@ -224,7 +336,77 @@ class Engine:
         self.gamepad.reset()
         self.gamepad.update()
 
-    # ---------------------------------------------------------------- config
+    # ----------------------------------------------------------- keybinds & config
+    def _compile_keybinds(self):
+        """Compiles self.keybinds into fast VK lookup tables."""
+        vk_to_actions = {}
+        all_mapped_vks = set()
+
+        for action_id, keys in self.keybinds.items():
+            if action_id not in ACTIONS_BY_ID:
+                continue
+            for key_name in keys:
+                vks = name_to_vks(key_name)
+                for vk in vks:
+                    all_mapped_vks.add(vk)
+                    if vk not in vk_to_actions:
+                        vk_to_actions[vk] = []
+                    if action_id not in vk_to_actions[vk]:
+                        vk_to_actions[vk].append(action_id)
+
+        self._vk_to_actions = vk_to_actions
+        self._all_mapped_vks = all_mapped_vks
+
+    def start_rebind(self, action_id, on_done=None, on_cancel=None):
+        with self._lock:
+            self._rebind_action = action_id
+            self._rebind_on_done = on_done
+            self._rebind_on_cancel = on_cancel
+
+    def cancel_rebind(self):
+        cb = None
+        action_id = None
+        with self._lock:
+            action_id = self._rebind_action
+            cb = self._rebind_on_cancel
+            self._rebind_action = None
+            self._rebind_on_done = None
+            self._rebind_on_cancel = None
+        if cb and action_id:
+            cb(action_id)
+
+    def finish_rebind(self, vk):
+        key_name = vk_to_name(vk)
+        cb = None
+        action_id = None
+        with self._lock:
+            action_id = self._rebind_action
+            cb = self._rebind_on_done
+            self._rebind_action = None
+            self._rebind_on_done = None
+            self._rebind_on_cancel = None
+
+            if action_id:
+                self.keybinds[action_id] = [key_name]
+                self._compile_keybinds()
+                self.save_config()
+
+        if cb and action_id:
+            cb(action_id, key_name)
+
+    def update_keybind(self, action_id, keys):
+        with self._lock:
+            if action_id in ACTIONS_BY_ID:
+                self.keybinds[action_id] = [str(k).upper() for k in keys]
+                self._compile_keybinds()
+                self.save_config()
+
+    def reset_keybinds_to_default(self):
+        with self._lock:
+            self.keybinds = {a["id"]: list(a["default"]) for a in ACTIONS}
+            self._compile_keybinds()
+            self.save_config()
+
     def load_config(self):
         try:
             with open(self.config_path, "r", encoding="utf-8") as f:
@@ -248,11 +430,21 @@ class Engine:
             except (TypeError, ValueError):
                 pass
 
+        if "keybinds" in saved and isinstance(saved["keybinds"], dict):
+            for aid in ACTIONS_BY_ID:
+                if aid in saved["keybinds"] and isinstance(saved["keybinds"][aid], list):
+                    self.keybinds[aid] = [str(k).upper() for k in saved["keybinds"][aid]]
+                else:
+                    self.keybinds[aid] = list(ACTIONS_BY_ID[aid]["default"])
+            self._compile_keybinds()
+
     def save_config(self):
         try:
+            data = dict(self.params)
+            data["keybinds"] = dict(self.keybinds)
             fd, tmp = tempfile.mkstemp(dir=os.path.dirname(self.config_path), suffix=".tmp")
             with os.fdopen(fd, "w", encoding="utf-8") as f:
-                json.dump(self.params, f, indent=4)
+                json.dump(data, f, indent=4)
             os.replace(tmp, self.config_path)
             print(f"Saved settings to {self.config_path}")
             return True
@@ -316,7 +508,7 @@ class Engine:
     def set_aim_only(self, value):
         self.params["aim_only"] = bool(value)
         with self._lock:
-            self._held.clear()
+            self._held_vks.clear()
             if self.active:
                 self._sync_keyboard_locked()
 
@@ -324,7 +516,7 @@ class Engine:
         with self._delta_lock:
             self._acc_dx = self._acc_dy = 0
         with self._lock:
-            self._held.clear()
+            self._held_vks.clear()
             self._buttons.clear()
             self.lx = self.ly = self.rx = self.ry = 0.0
             self.lt = self.rt = 0.0
@@ -333,11 +525,12 @@ class Engine:
 
     def snapshot(self):
         with self._lock:
+            btn_names = sorted([BUTTON_CODE_TO_NAME.get(b, str(b)) for b in self._buttons])
             return {
                 "active": self.active,
                 "lx": self.lx, "ly": self.ly, "rx": self.rx, "ry": self.ry,
                 "lt": self.lt, "rt": self.rt,
-                "buttons": sorted(self._buttons),
+                "buttons": btn_names,
                 "mouse_events": self.mouse_events,
                 "last_delta": self.last_delta,
             }
@@ -345,7 +538,7 @@ class Engine:
     # --------------------------------------------------------------- helpers
     def _seed_passthrough(self):
         self._passthrough.clear()
-        for vk in VK_TO_KEY:
+        for vk in self._all_mapped_vks:
             if user32.GetAsyncKeyState(vk) & 0x8000:
                 self._passthrough.add(vk)
 
@@ -360,7 +553,7 @@ class Engine:
                 self.gamepad.update()
             time.sleep(0.08)
             with self._lock:
-                if self.active and not self._held:
+                if self.active and not self._held_vks:
                     self.gamepad.left_joystick_float(0.0, 0.0)
                     self.gamepad.update()
         threading.Thread(target=pulse, name="wakeup", daemon=True).start()
@@ -382,11 +575,11 @@ class Engine:
                     self.gamepad.right_joystick_float(0.6, 0.0)
 
                     if step % 2 == 0:
-                        self.gamepad.release_button(BUTTON_MAP["L3"])
-                        self.gamepad.press_button(BUTTON_MAP["A"])
+                        self.gamepad.release_button(vg.XUSB_BUTTON.XUSB_GAMEPAD_LEFT_THUMB)
+                        self.gamepad.press_button(vg.XUSB_BUTTON.XUSB_GAMEPAD_A)
                     else:
-                        self.gamepad.release_button(BUTTON_MAP["A"])
-                        self.gamepad.press_button(BUTTON_MAP["L3"])
+                        self.gamepad.release_button(vg.XUSB_BUTTON.XUSB_GAMEPAD_A)
+                        self.gamepad.press_button(vg.XUSB_BUTTON.XUSB_GAMEPAD_LEFT_THUMB)
                     self.gamepad.update()
 
                 step += 1
@@ -401,19 +594,28 @@ class Engine:
         threading.Thread(target=_test, name="auto_test", daemon=True).start()
 
     def _sync_keyboard_locked(self):
-        held = self._held
-        y = (1.0 if "w" in held else 0.0) - (1.0 if "s" in held else 0.0)
-        x = (1.0 if "d" in held else 0.0) - (1.0 if "a" in held else 0.0)
+        active_actions = set()
+        for vk in self._held_vks:
+            for act in self._vk_to_actions.get(vk, []):
+                active_actions.add(act)
+
+        y = (1.0 if "move_forward" in active_actions else 0.0) - (1.0 if "move_backward" in active_actions else 0.0)
+        x = (1.0 if "move_right" in active_actions else 0.0) - (1.0 if "move_left" in active_actions else 0.0)
         if x and y:
             x, y = x * DIAGONAL, y * DIAGONAL
         self.lx, self.ly = x, y
 
-        desired = {btn for btn, keys in BUTTON_BINDINGS.items() if keys & held}
+        desired = set()
+        for action_id in active_actions:
+            act_info = ACTIONS_BY_ID.get(action_id)
+            if act_info and act_info["type"] == "button":
+                desired.add(act_info["btn"])
+
         for btn in desired - self._buttons:
-            self.gamepad.press_button(button=BUTTON_MAP[btn])
+            self.gamepad.press_button(button=btn)
         for btn in self._buttons - desired:
-            self.gamepad.release_button(button=BUTTON_MAP[btn])
-        self._buttons = set(desired)
+            self.gamepad.release_button(button=btn)
+        self._buttons = desired
 
         self.gamepad.left_joystick_float(x_value_float=x, y_value_float=y)
         self.gamepad.update()
@@ -444,14 +646,27 @@ class Engine:
         is_down = msg in (WM_KEYDOWN, WM_SYSKEYDOWN)
         is_up = msg in (WM_KEYUP, WM_SYSKEYUP)
 
-        if vk == VK_END:                      # kill-switch, never suppressed
+        # 1. Rebind capture mode
+        if self._rebind_action is not None:
+            if is_down:
+                if vk == 0x1B:  # ESC -> cancel
+                    self.cancel_rebind()
+                    return True
+                if vk in (VK_F8, VK_END):
+                    return False  # Safety keys cannot be bound
+                self.finish_rebind(vk)
+                return True
+            return True
+
+        # 2. Safety keys: F8 (Toggle) & END (Kill-Switch)
+        if vk == VK_END:
             if is_down:
                 self.request_shutdown()
             return False
 
-        if vk == VK_F8:                       # toggle, never suppressed
+        if vk == VK_F8:
             if is_down:
-                if not self._f8_down:         # ignore key-repeat while held
+                if not self._f8_down:
                     self._f8_down = True
                     self.toggle()
             elif is_up:
@@ -466,20 +681,20 @@ class Engine:
                 self._passthrough.discard(vk)
             return False
 
-        key = VK_TO_KEY.get(vk)
-        if key is None:
-            return False                      # Esc, Enter, Tab, chat... pass through
+        if vk not in self._all_mapped_vks:
+            return False  # Unmapped key: pass through (Chat, Enter, etc.)
 
         with self._lock:
             # Key-Repeat Debounce: only re-sync if held state actually changed
             if is_down:
-                if key in self._held:
-                    return True  # already registered down, suppress repeat event
-                self._held.add(key)
-            elif is_up:
-                if key not in self._held:
+                if vk in self._held_vks:
                     return True
-                self._held.discard(key)
+                self._held_vks.add(vk)
+            elif is_up:
+                if vk not in self._held_vks:
+                    return True
+                self._held_vks.discard(vk)
+
             self._sync_keyboard_locked()
         return True
 
