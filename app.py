@@ -55,7 +55,7 @@ class ControllerApp(ctk.CTk):
         ctk.set_appearance_mode("Dark")
         ctk.set_default_color_theme("blue")
 
-        self.title("KBM-to-XInput Virtual Controller (Phase 10)")
+        self.title("KBM-to-XInput Virtual Controller (Phase 11)")
         self.geometry("560x900")
         self.resizable(False, False)
         self.attributes("-topmost", engine.params["always_on_top"])
@@ -435,14 +435,22 @@ class ControllerApp(ctk.CTk):
         ctk.CTkCheckBox(row1, text="Invert Y-Axis", variable=self.invert_y_var,
                         command=self.on_invert_y_toggle).pack(side="left")
 
-        # Row 2 Checkbox: Block Physical Mouse Move
-        self.block_mouse_var = ctk.BooleanVar(value=p["block_mouse_move"])
+        # Row 2 Checkboxes: Block Physical Mouse Move & Rotational Booster
+        self.block_mouse_var = ctk.BooleanVar(value=p.get("block_mouse_move", True))
         ctk.CTkCheckBox(
             mode,
             text="Block Physical Mouse Move (Recommended - Freeze Cursor)",
             variable=self.block_mouse_var,
             command=self.on_block_mouse_toggle
-        ).pack(anchor="w", padx=14, pady=(4, 8))
+        ).pack(anchor="w", padx=14, pady=(4, 4))
+
+        self.booster_var = ctk.BooleanVar(value=p.get("rotational_booster", True))
+        ctk.CTkCheckBox(
+            mode,
+            text="Rotational Aim Assist Booster (Keep Stick Engaged on LT/RT)",
+            variable=self.booster_var,
+            command=self.on_booster_toggle
+        ).pack(anchor="w", padx=14, pady=(2, 8))
 
         # Sliders
         sliders = ctk.CTkFrame(parent, corner_radius=10)
@@ -669,6 +677,9 @@ class ControllerApp(ctk.CTk):
     def on_block_mouse_toggle(self):
         self.engine.params["block_mouse_move"] = self.block_mouse_var.get()
 
+    def on_booster_toggle(self):
+        self.engine.params["rotational_booster"] = self.booster_var.get()
+
     def on_auto_test(self):
         if self.engine.auto_test_running:
             return
@@ -765,7 +776,7 @@ class ControllerApp(ctk.CTk):
 
 def main():
     print("=" * 60)
-    print("  KBM-to-XInput Virtual Controller: Phase 10 Active")
+    print("  KBM-to-XInput Virtual Controller: Phase 11 Active")
     print("  [F8] toggle Active/Paused    [END] emergency exit")
     print("=" * 60)
 

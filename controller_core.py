@@ -48,6 +48,7 @@ DEFAULT_CONFIG = {
     "aim_only": False,          # True = only mouse -> right stick, keyboard untouched
     "block_mouse_move": True,   # True = freeze physical cursor via hook suppression
     "always_on_top": True,
+    "rotational_booster": True, # True = active stick engagement for sticky aim assist
 }
 
 LIMITS = {
@@ -258,11 +259,32 @@ def get_connected_xinput_slot():
 # ==============================================================================
 # AIM MATH
 # ==============================================================================
-def compute_right_stick(dx, dy, prev_rx, prev_ry, params):
-    """Convert one tick of mouse movement into smoothed right-stick values."""
-    # When mouse is not moving, immediately decay/snap stick to neutral with ZERO upward drift
+def compute_right_stick(dx, dy, prev_rx, prev_ry, params, is_engaged=False, last_dir=(1.0, 0.0)):
+    """Convert one tick of mouse movement into smoothed right-stick values.
+    
+    Uses a 50ms-65ms exponential decay envelope (decay = 0.72 per 120Hz tick) when mouse
+    stops moving so aim assist magnetism does not drop out between discrete mouse packets.
+    """
     if abs(dx) == 0 and abs(dy) == 0:
-        return 0.0, 0.0
+        decay = 0.72
+        rx = prev_rx * decay
+        ry = prev_ry * decay
+
+        # Rotational Aim Assist Booster: maintain micro-engagement (0.06) while aiming/shooting
+        if is_engaged:
+            min_mag = 0.06
+            mag = math.hypot(rx, ry)
+            if mag < min_mag:
+                nx, ny = last_dir
+                if nx == 0.0 and ny == 0.0:
+                    nx = 1.0
+                return nx * min_mag, ny * min_mag
+            return rx, ry
+
+        # When not actively aiming/shooting, snap strictly to (0.0, 0.0) once magnitude < 0.02
+        if math.hypot(rx, ry) < 0.02:
+            return 0.0, 0.0
+        return rx, ry
 
     input_x = float(dx)
     input_y = float(dy) if params["invert_y"] else float(-dy)
@@ -313,6 +335,7 @@ class Engine:
         self._first_aim_tick = True
         self._acc_dx = 0
         self._acc_dy = 0
+        self._last_aim_dir = (1.0, 0.0)
 
         self._rebind_action = None
         self._rebind_on_done = None
@@ -520,6 +543,7 @@ class Engine:
             self._buttons.clear()
             self.lx = self.ly = self.rx = self.ry = 0.0
             self.lt = self.rt = 0.0
+            self._last_aim_dir = (1.0, 0.0)
             self.gamepad.reset()
             self.gamepad.update()
 
@@ -603,6 +627,13 @@ class Engine:
         x = (1.0 if "move_right" in active_actions else 0.0) - (1.0 if "move_left" in active_actions else 0.0)
         if x and y:
             x, y = x * DIAGONAL, y * DIAGONAL
+
+        # Rotational Aim Assist Booster: apply micro-strafe if movement is idle and aiming/shooting
+        if self.params.get("rotational_booster", True) and (self.lt > 0.1 or self.rt > 0.1):
+            if x == 0.0 and y == 0.0:
+                step = (int(time.time() * 1000) // 120) % 2
+                x = 0.18 if step == 0 else -0.18
+
         self.lx, self.ly = x, y
 
         desired = set()
@@ -682,7 +713,9 @@ class Engine:
             return False
 
         if vk not in self._all_mapped_vks:
-            return False  # Unmapped key: pass through (Chat, Enter, etc.)
+            # While ACTIVE in full controller mode, suppress ALL physical keys so Roblox NEVER
+            # receives a stray keyboard input and switches away from Controller Mode
+            return True
 
         with self._lock:
             # Key-Repeat Debounce: only re-sync if held state actually changed
@@ -752,13 +785,48 @@ class Engine:
                     dx, dy = self._acc_dx, self._acc_dy
                     self._acc_dx = self._acc_dy = 0
 
-                new_rx, new_ry = compute_right_stick(dx, dy, self.rx, self.ry, self.params)
-                if round(new_rx, 3) != round(self.rx, 3) or round(new_ry, 3) != round(self.ry, 3):
-                    with self._lock:
-                        if self.active:
+                is_engaged = self.params.get("rotational_booster", True) and (self.lt > 0.1 or self.rt > 0.1)
+
+                if dx != 0 or dy != 0:
+                    input_x = float(dx)
+                    input_y = float(dy) if self.params["invert_y"] else float(-dy)
+                    mag = math.hypot(input_x, input_y)
+                    if mag > 0.0:
+                        self._last_aim_dir = (input_x / mag, input_y / mag)
+
+                new_rx, new_ry = compute_right_stick(
+                    dx, dy, self.rx, self.ry, self.params,
+                    is_engaged=is_engaged, last_dir=self._last_aim_dir
+                )
+
+                # Rotational Aim Assist Booster: Left Stick micro-strafe oscillation
+                has_move_keys = any(
+                    act in ("move_forward", "move_backward", "move_left", "move_right")
+                    for vk in self._held_vks
+                    for act in self._vk_to_actions.get(vk, [])
+                )
+                if is_engaged and not has_move_keys:
+                    step = (int(time.time() * 1000) // 120) % 2
+                    target_lx = 0.18 if step == 0 else -0.18
+                elif not has_move_keys:
+                    target_lx = 0.0
+                else:
+                    target_lx = self.lx
+
+                need_update = False
+                with self._lock:
+                    if self.active:
+                        if round(new_rx, 3) != round(self.rx, 3) or round(new_ry, 3) != round(self.ry, 3):
                             self.rx, self.ry = new_rx, new_ry
                             self.gamepad.right_joystick_float(x_value_float=new_rx, y_value_float=new_ry)
+                            need_update = True
+                        if target_lx != self.lx:
+                            self.lx = target_lx
+                            self.gamepad.left_joystick_float(x_value_float=self.lx, y_value_float=self.ly)
+                            need_update = True
+                        if need_update:
                             self.gamepad.update()
+
                 time.sleep(interval)
         except Exception:
             traceback.print_exc()

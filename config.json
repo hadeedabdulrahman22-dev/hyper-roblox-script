@@ -7,6 +7,7 @@
     "aim_only": false,
     "block_mouse_move": true,
     "always_on_top": true,
+    "rotational_booster": true,
     "keybinds": {
         "move_forward": [
             "W"
