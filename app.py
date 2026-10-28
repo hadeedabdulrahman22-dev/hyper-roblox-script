@@ -444,12 +444,15 @@ class ControllerApp(ctk.CTk):
             command=self.on_block_mouse_toggle
         ).pack(anchor="w", padx=14, pady=(4, 4))
 
-        self.booster_var = ctk.BooleanVar(value=p.get("rotational_booster", True))
+        self.aim_lock_var = ctk.BooleanVar(
+            value=p.get("aim_assist_lock", p.get("rotational_booster", True))
+        )
+        self.booster_var = self.aim_lock_var
         ctk.CTkCheckBox(
             mode,
-            text="Rotational Aim Assist Booster (Keep Stick Engaged on LT/RT)",
-            variable=self.booster_var,
-            command=self.on_booster_toggle
+            text="Aim Assist Lock (Keep Stick Above Deadzone on LT/RT)",
+            variable=self.aim_lock_var,
+            command=self.on_aim_lock_toggle
         ).pack(anchor="w", padx=14, pady=(2, 8))
 
         # Sliders
@@ -677,8 +680,13 @@ class ControllerApp(ctk.CTk):
     def on_block_mouse_toggle(self):
         self.engine.params["block_mouse_move"] = self.block_mouse_var.get()
 
+    def on_aim_lock_toggle(self):
+        val = self.aim_lock_var.get()
+        self.engine.params["aim_assist_lock"] = val
+        self.engine.params["rotational_booster"] = val
+
     def on_booster_toggle(self):
-        self.engine.params["rotational_booster"] = self.booster_var.get()
+        self.on_aim_lock_toggle()
 
     def on_auto_test(self):
         if self.engine.auto_test_running:

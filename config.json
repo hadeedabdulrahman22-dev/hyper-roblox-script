@@ -1,13 +1,13 @@
 {
     "sensitivity": 0.055,
-    "anti_deadzone": 0.18,
+    "anti_deadzone": 0.22,
     "exponent": 0.85,
     "smoothing": 0.4,
     "invert_y": false,
     "aim_only": false,
     "block_mouse_move": true,
     "always_on_top": true,
-    "rotational_booster": true,
+    "aim_assist_lock": true,
     "keybinds": {
         "move_forward": [
             "W"

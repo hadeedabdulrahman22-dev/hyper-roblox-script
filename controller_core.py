@@ -41,14 +41,14 @@ CURSOR_DRIFT_LIMIT_PX = 150
 
 DEFAULT_CONFIG = {
     "sensitivity": 0.055,       # mouse pixels -> stick strength
-    "anti_deadzone": 0.18,      # jump past the game's stick deadzone instantly
+    "anti_deadzone": 0.22,      # jump past the game's stick deadzone instantly (Hypershot deadzone: 0.25)
     "exponent": 0.85,           # <1 = more reactive to small movements
     "smoothing": 0.40,          # anti-jitter (0 = raw, higher = smoother)
     "invert_y": False,
     "aim_only": False,          # True = only mouse -> right stick, keyboard untouched
     "block_mouse_move": True,   # True = freeze physical cursor via hook suppression
     "always_on_top": True,
-    "rotational_booster": True, # True = active stick engagement for sticky aim assist
+    "aim_assist_lock": True,    # True = keep stick above deadzone on LT/RT (Aim Assist Lock)
 }
 
 LIMITS = {
@@ -262,17 +262,17 @@ def get_connected_xinput_slot():
 def compute_right_stick(dx, dy, prev_rx, prev_ry, params, is_engaged=False, last_dir=(1.0, 0.0)):
     """Convert one tick of mouse movement into smoothed right-stick values.
     
-    Uses a 50ms-65ms exponential decay envelope (decay = 0.72 per 120Hz tick) when mouse
+    Uses a smooth exponential decay envelope (decay = 0.78 per 120Hz tick) when mouse
     stops moving so aim assist magnetism does not drop out between discrete mouse packets.
     """
     if abs(dx) == 0 and abs(dy) == 0:
-        decay = 0.72
+        decay = 0.78
         rx = prev_rx * decay
         ry = prev_ry * decay
 
-        # Rotational Aim Assist Booster: maintain micro-engagement (0.06) while aiming/shooting
+        # Aim Assist Lock (Deadzone Keeper): keep stick above deadzone in last aimed direction on LT/RT
         if is_engaged:
-            min_mag = 0.06
+            min_mag = max(params.get("anti_deadzone", 0.22), 0.12)
             mag = math.hypot(rx, ry)
             if mag < min_mag:
                 nx, ny = last_dir
@@ -453,6 +453,9 @@ class Engine:
             except (TypeError, ValueError):
                 pass
 
+        if "rotational_booster" in saved and "aim_assist_lock" not in saved:
+            self.params["aim_assist_lock"] = bool(saved["rotational_booster"])
+
         if "keybinds" in saved and isinstance(saved["keybinds"], dict):
             for aid in ACTIONS_BY_ID:
                 if aid in saved["keybinds"] and isinstance(saved["keybinds"][aid], list):
@@ -628,11 +631,12 @@ class Engine:
         if x and y:
             x, y = x * DIAGONAL, y * DIAGONAL
 
-        # Rotational Aim Assist Booster: apply micro-strafe if movement is idle and aiming/shooting
-        if self.params.get("rotational_booster", True) and (self.lt > 0.1 or self.rt > 0.1):
+        # Aim Assist Lock: apply micro-strafe if movement is idle and aiming/shooting
+        lock_enabled = self.params.get("aim_assist_lock", self.params.get("rotational_booster", True))
+        if lock_enabled and (self.lt > 0.1 or self.rt > 0.1):
             if x == 0.0 and y == 0.0:
-                step = (int(time.time() * 1000) // 120) % 2
-                x = 0.18 if step == 0 else -0.18
+                step = (int(time.time() * 1000) // 140) % 2
+                x = 0.26 if step == 0 else -0.26
 
         self.lx, self.ly = x, y
 
@@ -785,7 +789,8 @@ class Engine:
                     dx, dy = self._acc_dx, self._acc_dy
                     self._acc_dx = self._acc_dy = 0
 
-                is_engaged = self.params.get("rotational_booster", True) and (self.lt > 0.1 or self.rt > 0.1)
+                lock_enabled = self.params.get("aim_assist_lock", self.params.get("rotational_booster", True))
+                is_engaged = lock_enabled and (self.lt > 0.1 or self.rt > 0.1)
 
                 if dx != 0 or dy != 0:
                     input_x = float(dx)
@@ -799,15 +804,15 @@ class Engine:
                     is_engaged=is_engaged, last_dir=self._last_aim_dir
                 )
 
-                # Rotational Aim Assist Booster: Left Stick micro-strafe oscillation
+                # Aim Assist Lock: Left Stick micro-strafe oscillation (±0.26 every 140ms, above 0.25 deadzone)
                 has_move_keys = any(
                     act in ("move_forward", "move_backward", "move_left", "move_right")
                     for vk in self._held_vks
                     for act in self._vk_to_actions.get(vk, [])
                 )
                 if is_engaged and not has_move_keys:
-                    step = (int(time.time() * 1000) // 120) % 2
-                    target_lx = 0.18 if step == 0 else -0.18
+                    step = (int(time.time() * 1000) // 140) % 2
+                    target_lx = 0.26 if step == 0 else -0.26
                 elif not has_move_keys:
                     target_lx = 0.0
                 else:

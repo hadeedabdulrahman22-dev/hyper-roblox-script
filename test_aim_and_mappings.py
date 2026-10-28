@@ -27,14 +27,14 @@ def test_zero_drift_when_mouse_stationary():
 
     # 2. When stopping after aiming up, smooth exponential decay reaches (0.0, 0.0) cleanly
     rx, ry = compute_right_stick(0, 0, 0.0, 0.95, params)
-    assert abs(ry - (0.95 * 0.72)) < 1e-4, f"Expected decay to {0.95 * 0.72}, got {ry}"
-    for _ in range(15):
+    assert abs(ry - (0.95 * 0.78)) < 1e-4, f"Expected decay to {0.95 * 0.78}, got {ry}"
+    for _ in range(20):
         rx, ry = compute_right_stick(0, 0, rx, ry, params)
     assert rx == 0.0 and ry == 0.0, f"Expected decay to (0.0, 0.0), got ({rx}, {ry})"
 
     # 3. When stopping after aiming right/down
     rx, ry = 0.75, -0.65
-    for _ in range(15):
+    for _ in range(20):
         rx, ry = compute_right_stick(0, 0, rx, ry, params)
     assert rx == 0.0 and ry == 0.0, f"Expected decay to (0.0, 0.0), got ({rx}, {ry})"
 
