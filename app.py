@@ -1,4 +1,4 @@
-"""KBM-to-XInput Virtual Controller - Phase 9 Tabbed GUI & Custom Keybinds."""
+"""KBM-to-XInput Virtual Controller - Phase 10 Interactive Controller Map & Diagram."""
 import os
 import sys
 import threading
@@ -49,11 +49,13 @@ class ControllerApp(ctk.CTk):
         self._closing = False
         self.current_rebind_id = None
         self.key_buttons = {}
+        self.diagram_items = {}
+        self.canvas = None
 
         ctk.set_appearance_mode("Dark")
         ctk.set_default_color_theme("blue")
 
-        self.title("KBM-to-XInput Virtual Controller (Phase 9)")
+        self.title("KBM-to-XInput Virtual Controller (Phase 10)")
         self.geometry("560x900")
         self.resizable(False, False)
         self.attributes("-topmost", engine.params["always_on_top"])
@@ -63,18 +65,18 @@ class ControllerApp(ctk.CTk):
         self.engine.start()
         self.update_telemetry()
 
-    # ------------------------------------------------------------------ UI
+    # ------------------------------------------------------------------ UI Setup
     def create_widgets(self):
         p = self.engine.params
 
         # 1. Top Status banner (persistent above tabs)
         self.status_frame = ctk.CTkFrame(self, corner_radius=12, border_width=2)
-        self.status_frame.pack(fill="x", padx=16, pady=(12, 4))
+        self.status_frame.pack(fill="x", padx=16, pady=(10, 4))
 
         self.status_label = ctk.CTkLabel(
             self.status_frame, text="STATUS: PAUSED (Press F8)",
             font=ctk.CTkFont(size=17, weight="bold"))
-        self.status_label.pack(pady=(8, 2))
+        self.status_label.pack(pady=(6, 2))
 
         ctk.CTkLabel(
             self.status_frame,
@@ -96,24 +98,322 @@ class ControllerApp(ctk.CTk):
             font=ctk.CTkFont(size=13, weight="bold"),
             fg_color="#1F6AA5",
             hover_color="#144870",
-            height=36,
+            height=34,
             command=self.on_auto_test
         )
         self.auto_test_btn.pack(fill="x", padx=16, pady=(2, 6))
 
-        # 3. Tabview: Tab 1 = Aim & Tuning, Tab 2 = Custom Keybinds
+        # 3. Tabview: 3 Tabs (Controller Map, Aim & Tuning, Custom Keybinds)
         self.tabview = ctk.CTkTabview(self, corner_radius=10)
         self.tabview.pack(fill="both", expand=True, padx=16, pady=(2, 10))
 
+        tab_map = self.tabview.add("🎮 Controller Map")
         tab_aim = self.tabview.add("Aim & Tuning")
         tab_keys = self.tabview.add("Custom Keybinds")
 
+        self._build_map_tab(tab_map)
         self._build_aim_tab(tab_aim, p)
         self._build_keybinds_tab(tab_keys)
 
-    # ----------------------------------------------------------- Tab 1: Aim & Tuning
+        # Start on Controller Map tab so diagram is front and center
+        self.tabview.set("🎮 Controller Map")
+
+    # ----------------------------------------------------------- Helper: Key String
+    def _key_str(self, action_id, default=""):
+        keys = self.engine.keybinds.get(action_id, [])
+        if not keys:
+            return default
+        return "/".join(keys) if len(keys) > 1 else keys[0]
+
+    # ----------------------------------------------------------- Tab 1: Visual Controller Map
+    def _build_map_tab(self, parent):
+        # Top banner with title and shortcut button
+        top_bar = ctk.CTkFrame(parent, fg_color="transparent")
+        top_bar.pack(fill="x", padx=6, pady=(2, 4))
+
+        ctk.CTkLabel(
+            top_bar,
+            text="Interactive Xbox 360 Controller Blueprint",
+            font=ctk.CTkFont(size=13, weight="bold"),
+            text_color="#00E676"
+        ).pack(side="left", pady=2)
+
+        ctk.CTkButton(
+            top_bar,
+            text="Rebind Keys ➡️",
+            font=ctk.CTkFont(size=11, weight="bold"),
+            width=110,
+            height=26,
+            fg_color="#2D3748",
+            hover_color="#4A5568",
+            command=lambda: self.tabview.set("Custom Keybinds")
+        ).pack(side="right", pady=2)
+
+        # 500x380 Canvas Container Frame
+        canvas_frame = ctk.CTkFrame(parent, fg_color="#121518", corner_radius=10)
+        canvas_frame.pack(padx=4, pady=(2, 4))
+
+        self.canvas = tk.Canvas(
+            canvas_frame,
+            width=500,
+            height=380,
+            bg="#16191D",
+            highlightthickness=0
+        )
+        self.canvas.pack(padx=4, pady=4)
+
+        c = self.canvas
+
+        # 1. Controller Body Silhouette (22-point smooth spline)
+        body_points = [
+            110, 95, 88, 105, 62, 168, 72, 270, 88, 342, 112, 356, 134, 345, 156, 285,
+            205, 270, 250, 275, 295, 270, 344, 285, 366, 345, 388, 356, 412, 342,
+            428, 270, 438, 168, 412, 105, 390, 95, 290, 102, 250, 105, 210, 102
+        ]
+        c.create_polygon(body_points, fill="#23272E", outline="#3E4451", width=2, smooth=True)
+
+        # 2. Trigger/Bumper Connector Lines
+        c.create_line(135, 48, 135, 54, fill="#5E81AC", width=2)
+        c.create_line(365, 48, 365, 54, fill="#5E81AC", width=2)
+
+        # 3. Triggers (LT & RT)
+        self.diagram_items["btn_LT"] = c.create_rectangle(
+            85, 16, 185, 48, fill="#252B35", outline="#3498DB", width=2)
+        self.diagram_items["text_LT"] = c.create_text(
+            135, 32, text="LT: RMB (Aim)", fill="#E0E6ED", font=("Segoe UI", 9, "bold"))
+
+        self.diagram_items["btn_RT"] = c.create_rectangle(
+            315, 16, 415, 48, fill="#252B35", outline="#E74C3C", width=2)
+        self.diagram_items["text_RT"] = c.create_text(
+            365, 32, text="RT: LMB (Shoot)", fill="#E0E6ED", font=("Segoe UI", 9, "bold"))
+
+        # 4. Bumpers (LB & RB)
+        self.diagram_items["btn_LB"] = c.create_rectangle(
+            85, 54, 185, 82, fill="#2E3440", outline="#5E81AC", width=1)
+        self.diagram_items["text_LB"] = c.create_text(
+            135, 68, text="LB/L1: Q", fill="#E0E6ED", font=("Segoe UI", 9, "bold"))
+
+        self.diagram_items["btn_RB"] = c.create_rectangle(
+            315, 54, 415, 82, fill="#2E3440", outline="#5E81AC", width=1)
+        self.diagram_items["text_RB"] = c.create_text(
+            365, 68, text="RB/R1: E", fill="#E0E6ED", font=("Segoe UI", 9, "bold"))
+
+        # 5. Left Analog Stick (x=135, y=155)
+        c.create_oval(107, 127, 163, 183, fill="#191C20", outline="#3E4451", width=2)
+        self.diagram_items["cap_LS"] = c.create_oval(
+            115, 135, 155, 175, fill="#282C34", outline="#5E81AC", width=2)
+        self.diagram_items["text_LS"] = c.create_text(
+            135, 155, text="WASD", fill="#FFFFFF", font=("Segoe UI", 10, "bold"))
+        c.create_text(135, 118, text="Left Stick", fill="#88C0D0", font=("Segoe UI", 8, "bold"))
+        self.diagram_items["lbl_L3"] = c.create_text(
+            135, 195, text="L3: C / LSHIFT", fill="#EBCB8B", font=("Segoe UI", 8, "bold"))
+
+        # 6. Back & Start Buttons
+        self.diagram_items["btn_back"] = c.create_oval(
+            203, 133, 227, 157, fill="#2D333B", outline="#4C566A", width=2)
+        c.create_text(215, 145, text="Back", fill="#E0E6ED", font=("Segoe UI", 7, "bold"))
+        self.diagram_items["lbl_back"] = c.create_text(
+            215, 166, text="Back: M", fill="#A0A0A0", font=("Segoe UI", 8, "bold"))
+
+        self.diagram_items["btn_start"] = c.create_oval(
+            273, 133, 297, 157, fill="#2D333B", outline="#4C566A", width=2)
+        c.create_text(285, 145, text="Start", fill="#E0E6ED", font=("Segoe UI", 7, "bold"))
+        self.diagram_items["lbl_start"] = c.create_text(
+            285, 166, text="Start: K", fill="#A0A0A0", font=("Segoe UI", 8, "bold"))
+
+        # 7. Center Xbox Jewel Logo
+        c.create_oval(236, 124, 264, 152, fill="#1E2227", outline="#00E676", width=2)
+        c.create_text(250, 138, text="X", fill="#00E676", font=("Segoe UI", 12, "bold"))
+
+        # 8. ABXY Face Buttons Cluster (Diamond around x=365, y=152)
+        # Y Button (Top: x=365, y=122)
+        self.diagram_items["btn_Y"] = c.create_oval(
+            353, 110, 377, 134, fill="#2A2715", outline="#F1C40F", width=2)
+        self.diagram_items["text_Y"] = c.create_text(
+            365, 122, text="Y", fill="#F1C40F", font=("Segoe UI", 10, "bold"))
+        self.diagram_items["lbl_Y"] = c.create_text(
+            400, 122, text="1, 2", fill="#F1C40F", font=("Segoe UI", 8, "bold"))
+
+        # X Button (Left: x=335, y=152)
+        self.diagram_items["btn_X"] = c.create_oval(
+            323, 140, 347, 164, fill="#142230", outline="#3498DB", width=2)
+        self.diagram_items["text_X"] = c.create_text(
+            335, 152, text="X", fill="#3498DB", font=("Segoe UI", 10, "bold"))
+        self.diagram_items["lbl_X"] = c.create_text(
+            304, 152, text="R, V", fill="#3498DB", font=("Segoe UI", 8, "bold"))
+
+        # B Button (Right: x=395, y=152)
+        self.diagram_items["btn_B"] = c.create_oval(
+            383, 140, 407, 164, fill="#2D1818", outline="#E74C3C", width=2)
+        self.diagram_items["text_B"] = c.create_text(
+            395, 152, text="B", fill="#E74C3C", font=("Segoe UI", 10, "bold"))
+        self.diagram_items["lbl_B"] = c.create_text(
+            424, 152, text="X", fill="#E74C3C", font=("Segoe UI", 8, "bold"))
+
+        # A Button (Bottom: x=365, y=182)
+        self.diagram_items["btn_A"] = c.create_oval(
+            353, 170, 377, 194, fill="#12261A", outline="#2ECC71", width=2)
+        self.diagram_items["text_A"] = c.create_text(
+            365, 182, text="A", fill="#2ECC71", font=("Segoe UI", 10, "bold"))
+        self.diagram_items["lbl_A"] = c.create_text(
+            365, 203, text="SPACE", fill="#2ECC71", font=("Segoe UI", 8, "bold"))
+
+        # 9. D-Pad Directional Pad (x=185, y=255)
+        self.diagram_items["dpad_up"] = c.create_rectangle(
+            176, 233, 194, 255, fill="#252A30", outline="#4C566A")
+        self.diagram_items["dpad_down"] = c.create_rectangle(
+            176, 255, 194, 277, fill="#252A30", outline="#4C566A")
+        self.diagram_items["dpad_left"] = c.create_rectangle(
+            163, 246, 185, 264, fill="#252A30", outline="#4C566A")
+        self.diagram_items["dpad_right"] = c.create_rectangle(
+            185, 246, 207, 264, fill="#252A30", outline="#4C566A")
+        c.create_oval(179, 249, 191, 261, fill="#1E2227", outline="#3E4451")
+
+        self.diagram_items["lbl_dpad_up"] = c.create_text(
+            185, 222, text="Up: 3", fill="#88C0D0", font=("Segoe UI", 8, "bold"))
+        self.diagram_items["lbl_dpad_left"] = c.create_text(
+            138, 255, text="L: B", fill="#88C0D0", font=("Segoe UI", 8, "bold"))
+        self.diagram_items["lbl_dpad_right"] = c.create_text(
+            232, 255, text="R: TAB", fill="#88C0D0", font=("Segoe UI", 8, "bold"))
+        self.diagram_items["lbl_dpad_down"] = c.create_text(
+            185, 288, text="Down: H", fill="#88C0D0", font=("Segoe UI", 8, "bold"))
+
+        # 10. Right Analog Stick (x=315, y=255)
+        c.create_oval(287, 227, 343, 283, fill="#191C20", outline="#3E4451", width=2)
+        self.diagram_items["cap_RS"] = c.create_oval(
+            295, 235, 335, 275, fill="#282C34", outline="#88C0D0", width=2)
+        self.diagram_items["text_RS"] = c.create_text(
+            315, 255, text="Mouse", fill="#FFFFFF", font=("Segoe UI", 10, "bold"))
+        c.create_text(315, 218, text="Right Stick (Aim)", fill="#88C0D0", font=("Segoe UI", 8, "bold"))
+        self.diagram_items["lbl_R3"] = c.create_text(
+            315, 295, text="R3: F Melee", fill="#EBCB8B", font=("Segoe UI", 8, "bold"))
+
+        # Initialize canvas labels with current bindings
+        self.refresh_diagram_labels()
+
+        # Bottom Quick Reference Banner
+        quick_frame = ctk.CTkFrame(parent, fg_color="#18232C", corner_radius=8)
+        quick_frame.pack(fill="x", padx=6, pady=(2, 6))
+
+        ctk.CTkLabel(
+            quick_frame,
+            text="💡 Live Diagnostic: Buttons glow when pressed & sticks deflect with WASD / Mouse movement!",
+            font=ctk.CTkFont(size=11),
+            text_color="#88C0D0"
+        ).pack(anchor="w", padx=10, pady=(6, 2))
+
+        ctk.CTkLabel(
+            quick_frame,
+            text="Primary Controls:  WASD = Left Stick  |  Mouse = Right Stick  |  LMB = RT Shoot  |  RMB = LT Aim",
+            font=ctk.CTkFont(size=10),
+            text_color="#A0A0A0"
+        ).pack(anchor="w", padx=10, pady=(0, 6))
+
+    def refresh_diagram_labels(self):
+        """Update all text labels on the controller diagram to match active keybinds."""
+        if not self.canvas:
+            return
+        c = self.canvas
+
+        c.itemconfig(self.diagram_items["text_LB"],
+                     text=f"LB/L1: {self._key_str('ability_1', 'Q')}")
+        c.itemconfig(self.diagram_items["text_RB"],
+                     text=f"RB/R1: {self._key_str('ability_2', 'E')}")
+
+        c.itemconfig(self.diagram_items["lbl_L3"],
+                     text=f"L3: {self._key_str('slide', 'C/LSHIFT')}")
+        c.itemconfig(self.diagram_items["lbl_R3"],
+                     text=f"R3: {self._key_str('quick_melee', 'F')} Melee")
+
+        c.itemconfig(self.diagram_items["lbl_back"],
+                     text=f"Back: {self._key_str('cursor_back', 'M')}")
+        c.itemconfig(self.diagram_items["lbl_start"],
+                     text=f"Start: {self._key_str('menu_start', 'K')}")
+
+        c.itemconfig(self.diagram_items["lbl_Y"],
+                     text=self._key_str("swap_weapons", "1, 2"))
+        c.itemconfig(self.diagram_items["lbl_X"],
+                     text=self._key_str("reload", "R, V"))
+        c.itemconfig(self.diagram_items["lbl_B"],
+                     text=self._key_str("ability_3", "X"))
+        c.itemconfig(self.diagram_items["lbl_A"],
+                     text=self._key_str("jump", "SPACE"))
+
+        c.itemconfig(self.diagram_items["lbl_dpad_up"],
+                     text=f"Up: {self._key_str('equip_melee', '3')}")
+        c.itemconfig(self.diagram_items["lbl_dpad_left"],
+                     text=f"L: {self._key_str('emote', 'B')}")
+        c.itemconfig(self.diagram_items["lbl_dpad_right"],
+                     text=f"R: {self._key_str('scoreboard', 'TAB')}")
+        c.itemconfig(self.diagram_items["lbl_dpad_down"],
+                     text=f"Down: {self._key_str('dpad_down', 'H')}")
+
+    def _update_diagram_glow(self, s):
+        """Highlight active buttons and shift thumbstick positions in real time."""
+        if not self.canvas:
+            return
+        c = self.canvas
+        btns = set(s.get("buttons", []))
+
+        # ABXY Face Buttons
+        c.itemconfig(self.diagram_items["btn_A"],
+                     fill="#00E676" if "A" in btns else "#12261A")
+        c.itemconfig(self.diagram_items["btn_B"],
+                     fill="#FF3333" if "B" in btns else "#2D1818")
+        c.itemconfig(self.diagram_items["btn_X"],
+                     fill="#00B0FF" if "X" in btns else "#142230")
+        c.itemconfig(self.diagram_items["btn_Y"],
+                     fill="#FFD700" if "Y" in btns else "#2A2715")
+
+        # Bumpers
+        c.itemconfig(self.diagram_items["btn_LB"],
+                     fill="#00E676" if "LB" in btns else "#2E3440")
+        c.itemconfig(self.diagram_items["btn_RB"],
+                     fill="#00E676" if "RB" in btns else "#2E3440")
+
+        # Triggers (glow blue on aim, glow red on shoot)
+        c.itemconfig(self.diagram_items["btn_LT"],
+                     fill="#3498DB" if s.get("lt", 0) > 0.05 else "#252B35")
+        c.itemconfig(self.diagram_items["btn_RT"],
+                     fill="#E74C3C" if s.get("rt", 0) > 0.05 else "#252B35")
+
+        # D-Pad Arms
+        c.itemconfig(self.diagram_items["dpad_up"],
+                     fill="#00E676" if "DPAD_UP" in btns else "#252A30")
+        c.itemconfig(self.diagram_items["dpad_down"],
+                     fill="#00E676" if "DPAD_DOWN" in btns else "#252A30")
+        c.itemconfig(self.diagram_items["dpad_left"],
+                     fill="#00E676" if "DPAD_LEFT" in btns else "#252A30")
+        c.itemconfig(self.diagram_items["dpad_right"],
+                     fill="#00E676" if "DPAD_RIGHT" in btns else "#252A30")
+
+        # Start / Back
+        c.itemconfig(self.diagram_items["btn_start"],
+                     fill="#00E676" if "START" in btns else "#2D333B")
+        c.itemconfig(self.diagram_items["btn_back"],
+                     fill="#00E676" if "BACK" in btns else "#2D333B")
+
+        # Stick Click (L3 / R3)
+        c.itemconfig(self.diagram_items["cap_LS"],
+                     fill="#00E676" if "L3" in btns else "#282C34")
+        c.itemconfig(self.diagram_items["cap_RS"],
+                     fill="#00E676" if "R3" in btns else "#282C34")
+
+        # Dynamic Thumbstick Deflection
+        lx, ly = s.get("lx", 0.0), s.get("ly", 0.0)
+        ls_dx = round(lx * 8)
+        ls_dy = round(-ly * 8)
+        c.coords(self.diagram_items["cap_LS"], 115 + ls_dx, 135 + ls_dy, 155 + ls_dx, 175 + ls_dy)
+        c.coords(self.diagram_items["text_LS"], 135 + ls_dx, 155 + ls_dy)
+
+        rx, ry = s.get("rx", 0.0), s.get("ry", 0.0)
+        rs_dx = round(rx * 8)
+        rs_dy = round(-ry * 8)
+        c.coords(self.diagram_items["cap_RS"], 295 + rs_dx, 235 + rs_dy, 335 + rs_dx, 275 + rs_dy)
+        c.coords(self.diagram_items["text_RS"], 315 + rs_dx, 255 + rs_dy)
+
+    # ----------------------------------------------------------- Tab 2: Aim & Tuning
     def _build_aim_tab(self, parent, p):
-        # Mode controls
         mode = ctk.CTkFrame(parent, corner_radius=10)
         mode.pack(fill="x", padx=4, pady=4)
 
@@ -182,9 +482,8 @@ class ControllerApp(ctk.CTk):
                                         font=ctk.CTkFont(size=12, weight="bold"))
         self.save_status.pack(side="right")
 
-    # ----------------------------------------------------------- Tab 2: Custom Keybinds
+    # ----------------------------------------------------------- Tab 3: Custom Keybinds
     def _build_keybinds_tab(self, parent):
-        # Header bar with Reset button
         top_bar = ctk.CTkFrame(parent, fg_color="transparent")
         top_bar.pack(fill="x", padx=4, pady=(2, 4))
 
@@ -273,7 +572,7 @@ class ControllerApp(ctk.CTk):
                 btn.pack(side="right", padx=(6, 10), pady=6)
                 self.key_buttons[aid] = btn
 
-        # Bottom save & feedback bar for Tab 2
+        # Bottom save & feedback bar for Tab 3
         key_save_bar = ctk.CTkFrame(parent, fg_color="transparent")
         key_save_bar.pack(fill="x", padx=4, pady=(2, 6))
 
@@ -311,7 +610,6 @@ class ControllerApp(ctk.CTk):
 
     # ----------------------------------------------------------- Rebinding callbacks
     def on_start_rebind(self, action_id):
-        # If another button was waiting for input, cancel it
         if self.current_rebind_id and self.current_rebind_id != action_id:
             self.on_rebind_cancel(self.current_rebind_id)
 
@@ -332,6 +630,7 @@ class ControllerApp(ctk.CTk):
         if btn:
             keys = self.engine.keybinds.get(action_id, [key_name])
             btn.configure(text=", ".join(keys), fg_color="#2D3748", hover_color="#4A5568")
+        self.refresh_diagram_labels()
         self.show_key_status(f"Bound to {key_name}!")
 
     def on_rebind_cancel(self, action_id):
@@ -349,6 +648,7 @@ class ControllerApp(ctk.CTk):
         for aid, btn in self.key_buttons.items():
             keys = self.engine.keybinds.get(aid, [])
             btn.configure(text=", ".join(keys), fg_color="#2D3748", hover_color="#4A5568")
+        self.refresh_diagram_labels()
         self.show_key_status("Keybinds Reset to Defaults!")
 
     def show_key_status(self, text, color="#00E676"):
@@ -450,6 +750,9 @@ class ControllerApp(ctk.CTk):
         self.mouse_label.configure(
             text=f"Mouse events: {s['mouse_events']}   Last move: dx={dx} dy={dy}")
 
+        # Live visual glow and deflection on the controller diagram
+        self._update_diagram_glow(s)
+
         self.after(50, self.update_telemetry)
 
     def on_closing(self):
@@ -462,7 +765,7 @@ class ControllerApp(ctk.CTk):
 
 def main():
     print("=" * 60)
-    print("  KBM-to-XInput Virtual Controller: Phase 9 Active")
+    print("  KBM-to-XInput Virtual Controller: Phase 10 Active")
     print("  [F8] toggle Active/Paused    [END] emergency exit")
     print("=" * 60)
 
