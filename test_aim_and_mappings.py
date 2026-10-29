@@ -25,18 +25,15 @@ def test_zero_drift_when_mouse_stationary():
     assert rx == 0.0 and ry == 0.0, f"Expected (0.0, 0.0), got ({rx}, {ry})"
     assert ry <= 0.0, f"Upward drift detected: ry={ry}"
 
-    # 2. When stopping after aiming up, smooth exponential decay reaches (0.0, 0.0) cleanly
-    rx, ry = compute_right_stick(0, 0, 0.0, 0.95, params)
-    assert abs(ry - (0.95 * 0.78)) < 1e-4, f"Expected decay to {0.95 * 0.78}, got {ry}"
-    for _ in range(20):
-        rx, ry = compute_right_stick(0, 0, rx, ry, params)
-    assert rx == 0.0 and ry == 0.0, f"Expected decay to (0.0, 0.0), got ({rx}, {ry})"
+    # 2. When stopping after aiming up: 1 grace tick at 0.5 decay, then immediate snap to (0.0, 0.0) on tick 2
+    rx, ry = compute_right_stick(0, 0, 0.0, 0.95, params, zero_ticks=1)
+    assert abs(ry - (0.95 * 0.50)) < 1e-4, f"Expected grace tick decay to {0.95 * 0.50}, got {ry}"
+    rx, ry = compute_right_stick(0, 0, rx, ry, params, zero_ticks=2)
+    assert rx == 0.0 and ry == 0.0, f"Expected immediate snap to (0.0, 0.0) on tick 2, got ({rx}, {ry})"
 
-    # 3. When stopping after aiming right/down
-    rx, ry = 0.75, -0.65
-    for _ in range(20):
-        rx, ry = compute_right_stick(0, 0, rx, ry, params)
-    assert rx == 0.0 and ry == 0.0, f"Expected decay to (0.0, 0.0), got ({rx}, {ry})"
+    # 3. When stopping after aiming right/down: snaps to (0.0, 0.0) on zero_ticks >= 2
+    rx, ry = compute_right_stick(0, 0, 0.75, -0.65, params, zero_ticks=2)
+    assert rx == 0.0 and ry == 0.0, f"Expected immediate snap to (0.0, 0.0), got ({rx}, {ry})"
 
     # 4. Multi-tick rest test (simulating 10 ticks at 120Hz while mouse is still)
     cur_rx, cur_ry = 0.0, 0.0

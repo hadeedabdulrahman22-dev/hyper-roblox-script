@@ -40,15 +40,15 @@ UPDATE_RATE_HZ = 120
 CURSOR_DRIFT_LIMIT_PX = 150
 
 DEFAULT_CONFIG = {
-    "sensitivity": 0.055,       # mouse pixels -> stick strength
-    "anti_deadzone": 0.22,      # jump past the game's stick deadzone instantly (Hypershot deadzone: 0.25)
+    "sensitivity": 0.075,       # mouse pixels -> stick strength
+    "anti_deadzone": 0.06,      # jump past the game's stick deadzone instantly (Hypershot deadzone: 0.05)
     "exponent": 0.85,           # <1 = more reactive to small movements
-    "smoothing": 0.40,          # anti-jitter (0 = raw, higher = smoother)
+    "smoothing": 0.10,          # anti-jitter (0.10 = crisp 1:1 stopping power)
     "invert_y": False,
     "aim_only": False,          # True = only mouse -> right stick, keyboard untouched
     "block_mouse_move": True,   # True = freeze physical cursor via hook suppression
     "always_on_top": True,
-    "aim_assist_lock": True,    # True = keep stick above deadzone on LT/RT (Aim Assist Lock)
+    "aim_assist_lock": True,    # True = subtle Left-Stick rotational assist on LT/RT
 }
 
 LIMITS = {
@@ -259,29 +259,21 @@ def get_connected_xinput_slot():
 # ==============================================================================
 # AIM MATH
 # ==============================================================================
-def compute_right_stick(dx, dy, prev_rx, prev_ry, params, is_engaged=False, last_dir=(1.0, 0.0)):
+def compute_right_stick(dx, dy, prev_rx, prev_ry, params, zero_ticks=1, **kwargs):
     """Convert one tick of mouse movement into smoothed right-stick values.
     
-    Uses a smooth exponential decay envelope (decay = 0.78 per 120Hz tick) when mouse
-    stops moving so aim assist magnetism does not drop out between discrete mouse packets.
+    Crisp 1:1 mouse response:
+    - Right stick ONLY responds when physical mouse moves.
+    - When dx == 0 and dy == 0: allows at most 1 grace tick at 0.5 decay (to bridge 120Hz polling).
+    - On zero_ticks >= 2 (~16ms of no mouse input), immediately snaps (rx, ry) to (0.0, 0.0).
+    - Zero runaway drift or coasting while aiming or shooting.
     """
     if abs(dx) == 0 and abs(dy) == 0:
-        decay = 0.78
+        if zero_ticks >= 2 or (prev_rx == 0.0 and prev_ry == 0.0):
+            return 0.0, 0.0
+        decay = 0.50
         rx = prev_rx * decay
         ry = prev_ry * decay
-
-        # Aim Assist Lock (Deadzone Keeper): keep stick above deadzone in last aimed direction on LT/RT
-        if is_engaged:
-            min_mag = max(params.get("anti_deadzone", 0.22), 0.12)
-            mag = math.hypot(rx, ry)
-            if mag < min_mag:
-                nx, ny = last_dir
-                if nx == 0.0 and ny == 0.0:
-                    nx = 1.0
-                return nx * min_mag, ny * min_mag
-            return rx, ry
-
-        # When not actively aiming/shooting, snap strictly to (0.0, 0.0) once magnitude < 0.02
         if math.hypot(rx, ry) < 0.02:
             return 0.0, 0.0
         return rx, ry
@@ -335,6 +327,7 @@ class Engine:
         self._first_aim_tick = True
         self._acc_dx = 0
         self._acc_dy = 0
+        self._zero_ticks = 0
         self._last_aim_dir = (1.0, 0.0)
 
         self._rebind_action = None
@@ -455,6 +448,8 @@ class Engine:
 
         if "rotational_booster" in saved and "aim_assist_lock" not in saved:
             self.params["aim_assist_lock"] = bool(saved["rotational_booster"])
+        if "response_exponent" in saved and "exponent" not in saved:
+            self.params["exponent"] = float(saved["response_exponent"])
 
         if "keybinds" in saved and isinstance(saved["keybinds"], dict):
             for aid in ACTIONS_BY_ID:
@@ -541,6 +536,7 @@ class Engine:
     def reset_inputs(self):
         with self._delta_lock:
             self._acc_dx = self._acc_dy = 0
+            self._zero_ticks = 0
         with self._lock:
             self._held_vks.clear()
             self._buttons.clear()
@@ -631,12 +627,12 @@ class Engine:
         if x and y:
             x, y = x * DIAGONAL, y * DIAGONAL
 
-        # Aim Assist Lock: apply micro-strafe if movement is idle and aiming/shooting
+        # Aim Assist Lock: apply subtle Left-Stick micro-strafe (±0.07) if movement is idle and aiming/shooting
         lock_enabled = self.params.get("aim_assist_lock", self.params.get("rotational_booster", True))
         if lock_enabled and (self.lt > 0.1 or self.rt > 0.1):
             if x == 0.0 and y == 0.0:
                 step = (int(time.time() * 1000) // 140) % 2
-                x = 0.26 if step == 0 else -0.26
+                x = 0.07 if step == 0 else -0.07
 
         self.lx, self.ly = x, y
 
@@ -789,6 +785,11 @@ class Engine:
                     dx, dy = self._acc_dx, self._acc_dy
                     self._acc_dx = self._acc_dy = 0
 
+                if dx != 0 or dy != 0:
+                    self._zero_ticks = 0
+                else:
+                    self._zero_ticks += 1
+
                 lock_enabled = self.params.get("aim_assist_lock", self.params.get("rotational_booster", True))
                 is_engaged = lock_enabled and (self.lt > 0.1 or self.rt > 0.1)
 
@@ -800,11 +801,10 @@ class Engine:
                         self._last_aim_dir = (input_x / mag, input_y / mag)
 
                 new_rx, new_ry = compute_right_stick(
-                    dx, dy, self.rx, self.ry, self.params,
-                    is_engaged=is_engaged, last_dir=self._last_aim_dir
+                    dx, dy, self.rx, self.ry, self.params, zero_ticks=self._zero_ticks
                 )
 
-                # Aim Assist Lock: Left Stick micro-strafe oscillation (±0.26 every 140ms, above 0.25 deadzone)
+                # Aim Assist Lock: Subtle Left-Stick micro-strafe (±0.07, just above 0.05 in-game deadzone)
                 has_move_keys = any(
                     act in ("move_forward", "move_backward", "move_left", "move_right")
                     for vk in self._held_vks
@@ -812,7 +812,7 @@ class Engine:
                 )
                 if is_engaged and not has_move_keys:
                     step = (int(time.time() * 1000) // 140) % 2
-                    target_lx = 0.26 if step == 0 else -0.26
+                    target_lx = 0.07 if step == 0 else -0.07
                 elif not has_move_keys:
                     target_lx = 0.0
                 else:

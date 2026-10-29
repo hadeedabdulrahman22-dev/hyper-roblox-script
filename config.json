@@ -1,8 +1,8 @@
 {
-    "sensitivity": 0.055,
-    "anti_deadzone": 0.22,
+    "sensitivity": 0.075,
+    "anti_deadzone": 0.06,
     "exponent": 0.85,
-    "smoothing": 0.4,
+    "smoothing": 0.1,
     "invert_y": false,
     "aim_only": false,
     "block_mouse_move": true,

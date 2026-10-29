@@ -55,7 +55,7 @@ class ControllerApp(ctk.CTk):
         ctk.set_appearance_mode("Dark")
         ctk.set_default_color_theme("blue")
 
-        self.title("KBM-to-XInput Virtual Controller (Phase 11)")
+        self.title("KBM-to-XInput Virtual Controller (Phase 12)")
         self.geometry("560x900")
         self.resizable(False, False)
         self.attributes("-topmost", engine.params["always_on_top"])
@@ -784,7 +784,7 @@ class ControllerApp(ctk.CTk):
 
 def main():
     print("=" * 60)
-    print("  KBM-to-XInput Virtual Controller: Phase 11 Active")
+    print("  KBM-to-XInput Virtual Controller: Phase 12 Active")
     print("  [F8] toggle Active/Paused    [END] emergency exit")
     print("=" * 60)
 
